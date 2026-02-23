@@ -12,9 +12,9 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug",
-            "executable": "/Users/jamie/Development/8052LEDSign/.pio/build/Generic8052/firmware.hex",
-            "projectEnvName": "Generic8052",
-            "toolchainBinDir": "/Users/jamie/.platformio/packages/toolchain-sdcc/bin",
+            "executable": "/Users/jamie/Development/8052LEDSign/.pio/build/avr_host/firmware.elf",
+            "projectEnvName": "avr_host",
+            "toolchainBinDir": "/Users/jamie/.platformio/packages/toolchain-atmelavr/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "preLaunchTask": {
                 "type": "PlatformIO",
@@ -25,18 +25,18 @@
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (skip Pre-Debug)",
-            "executable": "/Users/jamie/Development/8052LEDSign/.pio/build/Generic8052/firmware.hex",
-            "projectEnvName": "Generic8052",
-            "toolchainBinDir": "/Users/jamie/.platformio/packages/toolchain-sdcc/bin",
+            "executable": "/Users/jamie/Development/8052LEDSign/.pio/build/avr_host/firmware.elf",
+            "projectEnvName": "avr_host",
+            "toolchainBinDir": "/Users/jamie/.platformio/packages/toolchain-atmelavr/bin",
             "internalConsoleOptions": "openOnSessionStart"
         },
         {
             "type": "platformio-debug",
             "request": "launch",
             "name": "PIO Debug (without uploading)",
-            "executable": "/Users/jamie/Development/8052LEDSign/.pio/build/Generic8052/firmware.hex",
-            "projectEnvName": "Generic8052",
-            "toolchainBinDir": "/Users/jamie/.platformio/packages/toolchain-sdcc/bin",
+            "executable": "/Users/jamie/Development/8052LEDSign/.pio/build/avr_host/firmware.elf",
+            "projectEnvName": "avr_host",
+            "toolchainBinDir": "/Users/jamie/.platformio/packages/toolchain-atmelavr/bin",
             "internalConsoleOptions": "openOnSessionStart",
             "loadMode": "manual"
         }
