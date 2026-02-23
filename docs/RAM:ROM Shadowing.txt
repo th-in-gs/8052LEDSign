@@ -1,0 +1,129 @@
+Memory: 256 bits, 32K - 15 bits of address (A0-A14).
+
+Want, in memory: Lower 16K: 'ROM'
+Upper 16K: 'RAM' mapped to lower 16K, but also appears as upper 16K of 'ROM' on read.
+Can appear twice in 'RAM' in both halfs (but doesn't need to).
+
+Native addressing:
+0x0000 - 0x7FFF
+
+So, want: PSEN Low:
+0x0000 - 0x3fff: ROM
+0x4000 - 0x7FFF: Mapped 'RAM'
+
+PSEN High:
+0x0000 - 0x3fff: RAM
+0x4000 - 0x7FFF: Shadow RAM?
+
+So, really, on RAM reads (~RD is low, ~PSEN high), A14 should always be set.
+On ROM reads (~PSEN is low, ~RD high), A14 should reflect real A14 pin.
+
+On RAM writes (~WR is low), A14 should always be zero.
+
+On ROM writes _from ATMega_ (~ROMWR is low), A14 should never be set.
+
+So, want, with ORIG A_14, ~PSEN, ~ROMWR
+
+0 0 0 --> X 
+0 0 1 --> 0
+0 1 0 --> 0
+0 1 1 --> 1
+1 0 0 --> X
+1 0 1 --> 1
+1 1 0 --> 1
+1 1 1 --> 1
+
+ORIG_4A1 OR (~PSEN AND ~ROMWR)
+
+0 0 0 --> 0 - Lower ROM Read and Write (not real!)
+0 0 1 --> 0 - Lower ROM Read
+0 1 0 --> 0 - Lower ROM Write
+0 1 1 --> 1 - Lower RAM Access (maps to upper half)
+1 0 0 --> 1 - Upper ROM Read and Write (not real!)
+1 0 1 --> 1 - Upper ROM Read
+1 1 0 --> 1 - Upper ROM Write
+1 1 1 --> 1 - Upper RAM Access
+
+1 OR, 1 ANDs. __Two gate delays.__
+
+
+Or, with only NAND gates:
+
+(!ORIG_4A1) NAND (~PSEN NAND ~ROMWR)
+
+0 0 0 --> 1 1 --> 0 - Lower ROM Read and Write (not real!)
+0 0 1 --> 1 1 --> 0 - Lower ROM Read
+0 1 0 --> 1 1 --> 0 - Lower ROM Write
+0 1 1 --> 1 0 --> 1 - Lower RAM Access (maps to upper half)
+1 0 0 --> 0 1 --> 1 - Upper ROM Read and Write (not real!)
+1 0 1 --> 0 1 --> 1 - Upper ROM Read
+1 1 0 --> 0 1 --> 1 - Upper ROM Write
+1 1 1 --> 0 0 --> 1 - Upper RAM Access
+
+3 NANDS __Two gate delays.__
+
+Read on !(!~PSEN or !~RD), write on !(!~ROMWR or !~WR)
+
+2 ANDs (total, 3 ANDs, 1 OR) __One gate delay.__
+
+4 NANDs (total 7 NANDs) __Two gate delays.__
+
+Need more delays on write signal than on address signal though, to ensure address is valid before write.
+
+Add two ANDs or ORs  per line to AND/OR solution - total 3 ANDs, 5 ors OR 4 ANDs, 4 ORs.
+
+One NAND per line to NAND solution - total 9 NANDs.
+
+One Quad AND, one quad ORs
+
+or 3 Quad NANDs
+
+
+__OR__
+
+ORIG A_14, ~RD, ~WR
+
+0 0 0 --> X      1 0 0 -> X
+0 0 1 --> 1      1 0 1 -> 1
+0 1 0 --> 1      1 1 0 -> 1
+0 1 1 --> 0      1 1 1 -> 0
+1 0 0 --> X      0 0 0 -> X
+1 0 1 --> 1      0 0 1 -> 1
+1 1 0 --> 1      0 1 0 -> 1
+1 1 1 --> 1      0 1 1 -> 1
+
+
+ORIG_A14 OR (!~RD OR !~WR)
+
+ORIG_A14 OR (~RD XOR ~WR)
+
+NOT A NAND B NAND C
+
+0 0 0 -> 1 1 -> 0
+0 0 1 -> 1 1 -> 0
+
+
+0 0 0 -> X
+0 0 1 -> 1
+0 1 0 -> 1
+0 1 1 -> 1
+1 0 0 -> X
+1 0 1 -> 1
+1 1 0 -> 1
+1 1 1 -> 0
+
+If we invert the memory spaces, it's literally just NAND(ORIG_A14, ~RD, ~WR)!
+
+
+Or, back to PSEN and ROMWR:
+
+1 0 0 --> X 
+1 0 1 --> 0
+1 1 0 --> 0
+1 1 1 --> 1
+0 0 0 --> X
+0 0 1 --> 1
+0 1 0 --> 1
+0 1 1 --> 1
+
+Then it's just AND(ORIG_A14, PSEN, ROMRW)
