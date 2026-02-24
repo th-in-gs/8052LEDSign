@@ -1,8 +1,9 @@
 
 #define MICROCONTROLLER_8052
 #define MCS51REG_EXTERNAL_ROM
-// #define MCS51REG_EXTERNAL_RAM
-// #define MCS51REG_ENABLE_WARNINGS
+#define MCS51REG_EXTERNAL_RAM
+#define MCS51REG_ENABLE_WARNINGS
+
 #include <mcs51reg.h>
 
 #include <stdint.h>
@@ -11,10 +12,15 @@
 #include "CharacterSet.h"
 
 extern void scroll_text(const char *str, const uint8_t *font);
+extern void blink_loop(void);
 
-void main() {
+void main(void) {
+    blink_loop();
+
+    /*
     const char *str = "Hello, World!";
     while(true) {
         scroll_text(str, CharacterSet);
     }
+    */
 }
