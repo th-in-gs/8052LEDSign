@@ -1,0 +1,37 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build 8051 firmware",
+            "type": "shell",
+            "command": "platformio run -e mcs51",
+            "presentation": {
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Run 8051 emulator",
+            "type": "shell",
+            "command": "sh -lc 'cd \"${workspaceFolder}\" && clock=$(awk '\"'\"'/^\\[env:mcs51\\]/{f=1;next}/^\\[env:/{f=0} f && /^board_build\\.f_cpu/ {gsub(/ /,\"\"); split($0,a,\"=\"); print a[2]; exit}'\"'\"' platformio.ini) && emu8051 -clock=$clock -si .pio/build/mcs51/firmware.hex'",
+            "presentation": {
+                "focus": true,
+                "panel": "dedicated"
+            },
+            "dependsOn": "Build 8051 firmware",
+            "problemMatcher": []
+        },
+
+        {
+            "label": "Build + Run 8051 emulator",
+            "dependsOn": [
+                "Build 8051 firmware",
+                "Run 8051 emulator"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}Q
