@@ -36,21 +36,10 @@ mcs51_bin = os.path.abspath(f"{build_dir}/../mcs51/firmware.bin")
 local_bin = f"{build_dir}/xxd_gen/firmware.bin"
 
 os.makedirs(f"{build_dir}/xxd_gen", exist_ok=True)
-
-# Always try to update the local copy.  ``local_bin`` lives in the
-# AVR build directory and is used by the ``XxdBin`` builder below.  We
-# can't assume that it will persist between builds, so copy unconditionally
-# when the source exists.  If the source doesn't exist yet, print a helpful
-# warning instead of raising an exception; the build will normally generate
-# the file later when the mcs51 environment is built.
 if os.path.exists(mcs51_bin):
-    shutil.copy2(mcs51_bin, local_bin)
-else:
-    # This can happen when someone runs the AVR target standalone or when
-    # the nested invocation cleaned the mcs51 directory unexpectedly.  In
-    # most cases the mcs51 environment will be built shortly afterwards,
-    # so we just log a warning to avoid confusing stack traces.
-    print(f"Warning: mcs51 firmware not found at {mcs51_bin}, "
-          "AVR build may be out of date")
+    try:
+        os.symlink(mcs51_bin, local_bin)
+    except FileExistsError:
+        pass
 
 env.Append(PIOBUILDFILES=env.Object(env.XxdBin(local_bin)))
