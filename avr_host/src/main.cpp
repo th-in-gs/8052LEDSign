@@ -109,7 +109,7 @@ int main(void)
 
     serialInit(250000);
 
-    serialPrint("\n\nAVR Host Starting up...\n", true);
+    serialPrint("\n\nAVR Host Starting up...\n\n", true);
 
 
     // AVR starts with all ports as inputs, carrying a '0'.
@@ -133,7 +133,7 @@ int main(void)
     DDRD = 0b11111000;
 
     // RAM test
-    serialPrint("\n\nRAM test...\n", true);
+    serialPrint("RAM test...\n", true);
     {
         uint8_t errorCount = 0;
         uint16_t byteCount = 0;
@@ -154,12 +154,13 @@ int main(void)
         if(errorCount != 0) {
             serialPrint("FAIL! ");
             serialPrintDec(errorCount);
-            serialPrint(" errors!\n", true);
+            serialPrint(" errors!");
         } else {
             serialPrint("Passed - ");
             serialPrintDec(byteCount);
-            serialPrint(" bytes tested!\n", true);
+            serialPrint(" bytes tested!");
         }
+        serialPrint("\n\n", true);
     }
 
     // A 'fake' 8051 write:
@@ -170,7 +171,7 @@ int main(void)
 
     serialPrint("Writing ");
     serialPrintDec(firmware_len);
-    serialPrint(" bytes to 'ROM'...\n", true);
+    serialPrint(" bytes to 'ROM'...", true);
 
     for(uint16_t i = 0; i < firmware_len; ++i) {
         if((i % 4) == 0) {
@@ -212,16 +213,17 @@ int main(void)
             }
             serialPrintHex(byte, true);
         }
-        serialPrint("\n\n");
+        serialPrint("\n");
         if(errorCount != 0) {
             serialPrint("FAIL! ");
             serialPrintDec(errorCount);
-            serialPrint(" errors!\n\n", true);
+            serialPrint(" errors!");
         } else {
             serialPrint("Passed - ");
             serialPrintDec(i);
-            serialPrint(" bytes tested!\n\n", true);
+            serialPrint(" bytes tested!");
         }
+        serialPrint("\n\n", true);
     }
 
     // Tri-state the bus lines to let the 8052 take over when it comes out
