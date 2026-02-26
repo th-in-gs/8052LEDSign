@@ -9,18 +9,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#include "CharacterSet.h"
-
-extern void scroll_text(const char *str, const uint8_t *font);
+// This is defined in 'assembly.asm'.
 extern void blink_loop(void);
 
 void main(void) {
     blink_loop();
-
-    /*
-    const char *str = "Hello, World!";
-    while(true) {
-        scroll_text(str, CharacterSet);
-    }
-    */
 }

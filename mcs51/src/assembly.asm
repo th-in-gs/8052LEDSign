@@ -1,4 +1,3 @@
-; SDCC 8052 assembly code for scrolling text
     .globl _P1
     .globl _P1_0
 
@@ -20,9 +19,9 @@ _stall_for_1s:
     push 1
 
 ; Need to stall for (13875000 / 12) = 1,156,250  cycles
-; 17 * 255 * 255 = 780,300
+; 9 * 255 * 255 = 585,225 - so _roughly_ correct at 2 cycles per mov.
 ; Roughly correct...
-    mov a, #17
+    mov a, #9
 outer:
     mov r0, #255
 middle:
