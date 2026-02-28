@@ -1,17 +1,18 @@
-#ifndef __timer_h_included__
-#define __timer_h_included__
+#ifndef __serial_h_included__
+#define __serial_h_included__
 
 #include <stdint.h>
 
 // This is a interrupt-free simple interface for serial output. It buffers the characters sent to it.
-// It is important that`serialpoll()` be called regularly - it is what actually outputs the characters..
+// It is important that`serialPoll()` be called regularly - it is what actually outputs the characters.
 
 void serialInit(const uint32_t baudRate);
 void serialPoll();
 
 // These routines usually buffer the output.
-// If  wait' is  true, they will loop calling `serialPoll()` wait until the character is being output before returning.
-// Actual _transmission_ of the character by the UART hardware will occur after the return!
+// If  `wait` is  true, they will loop calling `serialPoll()` wait until the
+// character is being output before returning. Actual _transmission_ of the
+// character by the UART hardware may occur after the return.
 void serialPrint(const uint8_t ch, const bool wait = false);
 void serialPrint(const char *string, const bool wait = false);
 void serialPrintStr6(const uint8_t *str6, const bool wait = false);
@@ -51,4 +52,4 @@ void serialPrintDec(const auto number, const bool wait)
     serialPrint('0' + toPrint, wait);
 }
 
-#endif // __timer_h_included__
+#endif // __serial_h_included__
