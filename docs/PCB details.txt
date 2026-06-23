@@ -1,0 +1,23 @@
+Blank copper PCB size:
+
+101mm x 69mm
+
+4 x 2.75
+
+Need:  115 x 87
+
+
+
+"Great results milling PCBs from Eagle with the Nomad"
+
+https://web.archive.org/web/20160305021726/http://community.carbide3d.com/t/great-results-milling-pcbs-from-eagle-with-the-nomad/283
+
+https://community.carbide3d.com/t/my-first-project-using-pcb-isolation-milling/998/7
+
+
+PCB milling procedure:
+- Avi's bits - V-Bit, 0.1mm 15° (?) for traces.
+- Lower the Z until you feel the drag on a piece of paper. Raise it by three 0.25mm increments. Set Z.
+- 0.032" (~0.8mm) ball nose for through holes.
+- 3m/s
+- Find z that drags on paper, shift up 4 times with the minimum movement.
