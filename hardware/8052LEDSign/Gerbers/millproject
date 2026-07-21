@@ -1,0 +1,52 @@
+back=8052LEDSign-B_Cu.gbr
+front=8052LEDSign-F_Cu.gbr
+drill=8052LEDSign.drl
+outline=8052LEDSign-Edge_Cuts.gbr
+
+metric=true
+metricoutput=true
+zchange=20
+zsafe=0.25
+zero-start=false
+nom6=true
+
+front-output=front.gcode
+back-output=back.gcode
+milldrill-output=milldrill.gcode
+outline-output=outline.gcode
+
+# Milling options
+
+## 0.1mm deep.
+zwork=-0.127
+
+## 15 degree v-bit at 0.1mm: 2 * 0.127 * tan((30/2)°) + 0.1 = 0.168   
+mill-diameters=0.168     
+
+## Goal: three passes spaced 0.01mm apart.
+# Isolation width: (0.168 / 2) + 0.1 + 0.1 + (0.168 / 2) = 0.368  
+isolation-width=0.368     # Twice the width required to outline a trace. 
+
+## Overlap:
+# 0.01 / 0.168 = 0.0595    
+milling-overlap=5.95%     # This seems to be the percentage of tool width that _doesn't_ overlap!?
+
+mill-feed=180
+mill-vertfeed=88
+mill-speed=10000
+
+# Hole drilling options 
+milldrill-diameter=0.8
+min-milldrill-hole-diameter=0.5
+zdrill=-2.0
+zmilldrill=-2.0
+drill-speed=10000
+drill-feed=180
+onedrill=true
+
+# Outline cutting options
+cutter-diameter=0.0625in
+zcut=-2.0
+cut-feed=300
+cut-speed=10000
+cut-infeed=0.5 
