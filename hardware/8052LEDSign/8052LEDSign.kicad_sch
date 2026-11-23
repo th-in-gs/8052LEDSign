@@ -12003,7 +12003,7 @@
 		)
 		(uuid "8138ef75-0781-4aa9-bc81-66295a858215")
 	)
-	(label "~{RD}"
+	(label "~{WR}"
 		(at 250.19 129.54 180)
 		(effects
 			(font
@@ -12243,7 +12243,7 @@
 		)
 		(uuid "b7b50a2a-94f2-4bcc-9037-383dc144ec95")
 	)
-	(label "~{WR}"
+	(label "~{RD}"
 		(at 237.49 129.54 0)
 		(effects
 			(font

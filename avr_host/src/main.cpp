@@ -70,19 +70,48 @@ void write_byte(uint8_t byte)
 uint8_t read_byte(void)
 {
     uint8_t byte;
+
+    // Pre-charge the bus to 0xFF, then release it with the pull-ups enabled.
+    // Without this, if the RAM fails to drive the bus, the charge left on
+    // the bus lines from the last thing we wrote (usually the low byte of the
+    // address) is read back, which looks deceptively like valid data.
+    // With it, an undriven bus reads as 0xFF.
+    PORTB = 0xFF;
+    DDRB = 0xFF;
+    DDRB = 0;
+
     // Strobe read signal (active low)
     PORTD &= ~(1 << 5);
-    __asm__("nop"); // Need to give a cycle or so for the RAM to respond.
+    // Give the RAM time to respond: the read signal passes through the 7408,
+    // plus the RAM's access time. PINB also has a one-cycle synchroniser delay.
+    __asm__("nop\n\tnop");
     byte = PINB;
     PORTD |= (1 << 5);
+
+    // Pull-ups off.
+    PORTB = 0;
     return byte;
+}
+
+// Byte to write at `address` for RAM test pass `pass`. The final pass uses a
+// value derived from the address, so that faulty address lines (which make
+// different addresses alias the same RAM cell) are detected.
+static const uint8_t RAM_TEST_FIXED_PATTERNS[] PROGMEM = { 0x55, 0xAA, 0xFF, 0x00 };
+static const uint8_t RAM_TEST_PASSES = sizeof(RAM_TEST_FIXED_PATTERNS) + 1;
+
+uint8_t ram_test_pattern(uint8_t pass, uint16_t address)
+{
+    if(pass < sizeof(RAM_TEST_FIXED_PATTERNS)) {
+        return pgm_read_byte(&RAM_TEST_FIXED_PATTERNS[pass]);
+    }
+    return (uint8_t)(address ^ (address >> 8) ^ 0xA5);
 }
 
 int main(void)
 {
     power_off_unused_peripherals();
 
-    serialInit(250000);
+    serialInit(38400);
     serialPrint("\n\nAVR Host starting up...\n\n", true);
 
     // The AVR is connected to the 8051 like this:
@@ -140,31 +169,49 @@ int main(void)
     // RAM test
     serialPrint("RAM test...\n", true);
     {
-        uint8_t errorCount = 0;
-        uint16_t byteCount = 0;
-        for(; byteCount < ((uint16_t)1 << 15); ++byteCount) {
-            static const uint8_t patterns[] PROGMEM = { 0x55, 0xAA, 0xFF, 0x00 };
+        // Write the whole RAM, then read it all back. Reading back
+        // immediately after each write can't distinguish working RAM from
+        // the written byte still lingering on the bus.
+        static const uint16_t RAM_SIZE = (uint16_t)1 << 15;
+        static const uint8_t MAX_ERRORS_TO_PRINT = 8;
+        uint32_t errorCount = 0;
 
-            for(uint8_t p = 0; p < sizeof(patterns); p++) {
-                uint8_t pat = pgm_read_byte(&patterns[p]);
-
-                place_address_on_bus(byteCount);
-                write_byte(pat);
-                uint8_t val = read_byte();
-                if(val != pat) {
+        for(uint8_t pass = 0; pass < RAM_TEST_PASSES; ++pass) {
+            for(uint16_t address = 0; address < RAM_SIZE; ++address) {
+                place_address_on_bus(address);
+                write_byte(ram_test_pattern(pass, address));
+            }
+            for(uint16_t address = 0; address < RAM_SIZE; ++address) {
+                place_address_on_bus(address);
+                uint8_t expected = ram_test_pattern(pass, address);
+                uint8_t actual = read_byte();
+                if(actual != expected) {
+                    if(errorCount < MAX_ERRORS_TO_PRINT) {
+                        serialPrint("  Pass ", true);
+                        serialPrintDec(pass, true);
+                        serialPrint(" @", true);
+                        serialPrintHex16(address, true);
+                        serialPrint(": expected ", true);
+                        serialPrintHex(expected, true);
+                        serialPrint(", read ", true);
+                        serialPrintHex(actual, true);
+                        serialPrint('\n', true);
+                    }
                     ++errorCount;
                 }
             }
         }
         if(errorCount != 0) {
-            serialPrint("FAIL! ");
-            serialPrintDec(errorCount);
-            serialPrint(" errors!");
+            serialPrint("FAIL! ", true);
+            serialPrintDec(errorCount, true);
+            serialPrint(" errors in ", true);
         } else {
-            serialPrint("Passed - ");
-            serialPrintDec(byteCount);
-            serialPrint(" bytes tested!");
+            serialPrint("Passed - ", true);
         }
+        serialPrintDec(RAM_SIZE, true);
+        serialPrint(" bytes x ", true);
+        serialPrintDec(RAM_TEST_PASSES, true);
+        serialPrint(" passes tested.", true);
         serialPrint("\n\n", true);
     }
 
@@ -197,7 +244,7 @@ int main(void)
     // Verify write by reading back from RAM.
     {
         uint16_t i = 0;
-        uint8_t errorCount = 0;
+        uint16_t errorCount = 0;
         for(; i < firmware_len; ++i) {
             if((i % 4) == 0) {
                 serialPrint(' ', true);
@@ -251,6 +298,9 @@ int main(void)
 
     serialPrint("8052 reset released.\n\n", true);
 
-    while(true);
+    // Keep draining the serial output buffer.
+    while(true) {
+        serialPoll();
+    }
 }
 

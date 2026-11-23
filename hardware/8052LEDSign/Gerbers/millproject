@@ -31,7 +31,7 @@ isolation-width=0.368     # Twice the width required to outline a trace.
 # 0.01 / 0.168 = 0.0595    
 milling-overlap=5.95%     # This seems to be the percentage of tool width that _doesn't_ overlap!?
 
-mill-feed=180
+mill-feed=600
 mill-vertfeed=88
 mill-speed=10000
 
