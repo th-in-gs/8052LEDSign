@@ -120,3 +120,6 @@ tags
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/macos,platformio,visualstudiocode,vim,kicad
+
+### Python ###
+__pycache__/

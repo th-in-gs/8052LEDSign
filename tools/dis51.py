@@ -14,11 +14,17 @@ BITSFR = {0x88:['IT0','IE0','IT1','IE1','TR0','TF0','TR1','TF1'],
 0xC8:['CP_RL2','C_T2','TR2','EXEN2','TCLK','RCLK','EXF2','TF2'],
 0xD0:['P','PSW.1','OV','RS0','RS1','F0','AC','CY']}
 
+# Optional symbol names, filled in by tools that import this module.
+IRAM_NAMES = {}   # direct address (< 0x80) -> name
+BIT_NAMES = {}    # bit address -> name
+
 def dname(a):
     if a in SFR: return SFR[a]
+    if a in IRAM_NAMES: return IRAM_NAMES[a]
     if a < 0x80: return f'{a:02X}h'
     return f'SFR_{a:02X}'
 def bname(b):
+    if b in BIT_NAMES: return BIT_NAMES[b]
     if b < 0x80: return f'{0x20 + (b>>3):02X}h.{b&7}'
     base = b & 0xF8
     if base in BITSFR: return BITSFR[base][b&7]
@@ -101,10 +107,13 @@ def decode(rom, pc):
         if lo >= 8: return (1, f'MOV {rn},A', [], '')
     return (1, f'DB {op:02X}h ; ???', [], '')
 
-def main():
-    rom = open(sys.argv[1], 'rb').read()
-    extra = [int(x, 16) for x in sys.argv[2:]]
-    entries = [0x0000, 0x0003, 0x000B, 0x0013, 0x001B, 0x0023, 0x002B] + extra
+VECTORS = [0x0000, 0x0003, 0x000B, 0x0013, 0x001B, 0x0023, 0x002B]
+
+def trace(rom, extra):
+    """Recursive-descent trace from the vectors plus `extra` entry points.
+    Returns (code, labels, xrefs, ijmps): code maps address ->
+    (length, text, targets, kind)."""
+    entries = VECTORS + list(extra)
     code = {}            # addr -> (len, text, targets, kind)
     labels = collections.defaultdict(set)   # addr -> {'call','jmp',...}
     xrefs = collections.defaultdict(set)
@@ -122,6 +131,12 @@ def main():
             if kind == 'ijmp': ijmps.append(pc)
             if kind in ('jmp', 'ret', 'ijmp'): break
             pc += n
+    return code, labels, xrefs, ijmps
+
+def main():
+    rom = open(sys.argv[1], 'rb').read()
+    extra = [int(x, 16) for x in sys.argv[2:]]
+    code, labels, xrefs, ijmps = trace(rom, extra)
     covered = set()
     for a, (n, *_rest) in code.items(): covered.update(range(a, a+n))
     out = []
@@ -149,4 +164,5 @@ def main():
           f'{sum(1 for l in labels.values() if "call" in l)} called routines. '
           f'Indirect jumps (JMP @A+DPTR) at: {" ".join(f"{x:04X}" for x in ijmps)}', file=sys.stderr)
 
-main()
+if __name__ == "__main__":
+    main()

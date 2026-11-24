@@ -20,7 +20,9 @@ https://www.blog.montgomerie.net/tags/makerspace-mcu-series/.
 |---|---|
 | `romdump.bin` | The 16,384-byte ROM dump. Its internal checksum verifies. |
 | `ROM_ANALYSIS.md` | What the program does. |
+| `romdump_annotated.lst` | Annotated disassembly. |
 | `tools/dis51.py` | Minimal recursive-descent 8051 disassembler used for the analysis. |
+| `tools/annotate.py`, `tools/romdump_annotations.py` | Generator and annotation data for the annotated disassembly. |
 | `mcs51/src/romdump.c` | Dumper, run by the 8052. |
 | `avr_host/src/` | AVR host: loads the dumper, runs it, prints the dump over serial. |
 | `scripts/capture_romdump.py` | Captures the serial output into `romdump.bin`. |
