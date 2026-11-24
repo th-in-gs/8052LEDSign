@@ -73,7 +73,7 @@ LABELS = {
     0x0129: 'run_move',
     0x0151: 'TIMER0_ISR',
     0x0185: 'TIMER1_ISR',
-    0x01A6: 'timer1_setup',
+    0x01A6: 'post_move_timing',
     0x02DC: 'next_phase_a',
     0x02EE: 'output_phase_a',
     0x038A: 'next_phase_b',
@@ -115,7 +115,7 @@ LABELS = {
     0x0FE0: 'c_to_saved',
     0x0FE9: 'c_to_park',
     0x0FF2: 'short_delay',
-    0x031A: 'ramp_c',
+    0x031A: 'ramp_a',
     0x03A1: 'output_phase_b',
     0x0434: 'next_phase_c',
     0x0443: 'output_phase_c',
@@ -174,6 +174,9 @@ SUMMARY = {
     0x0861: 'outputs idle, wait for interlock, home C and B',
     0x0896: 'pulse P2.4, then motor A 88 steps',
     0x0601: 'jog motor A while key 5 or 6 is held',
+    0x01A6: 'P3.5, P2.6 pulse, then settle timing',
+    0x031A: 'motor A step period from ramp 057Dh',
+    0x0A54: 'status byte reads',
 }
 
 BLOCKS = {
@@ -272,7 +275,8 @@ A_FAULT, status error, park. Refused without the P2.3 option.""",
 
 0x0151: """\
 Timer 0: steps motor A (P0 high nibble) or motor B (P0 low nibble),
-whichever is moving. When bit 27h.7 is set, timer0_alt runs instead.""",
+whichever is moving. When bit 27h.7 is set, timer0_alt (post-move timing)
+runs instead.""",
 
 0x0185: """\
 Timer 1: steps motor C (P1 low nibble). Register bank 2.""",
@@ -325,8 +329,28 @@ C1h xx: 40 = enter read mode; 20 = motor D to state 1; 10 = park;
 in read mode or after a motor A fault.""",
 
 0x0A54: """\
-Dxh 00 in read mode: reply with the byte at 30h (D0), 31h (D1), 32h (D2),
-33h (D4), 34h (D8) or OPTION_P23 (DE). Outside read mode: 0A93h.""",
+Dxh 00: status reads. Normally: reply with 22h (D0, summary), 23h (D1,
+errors), 24h (D2, keys), 25h (D4, communication), 26h (D8, fault code) or
+OPTION_P23 (DE), copy it to the snapshot at 30h-34h, and clear what was
+read (0A93h). In read mode: reply with the snapshot, clearing nothing.""",
+
+0x01A6: """\
+After a motor B/C move at speed class 1-3: P3.5 = class 1, P2.6 low for one
+Timer 0 period (byte 0 of the entry at 01DFh), then mark the mechanism busy.
+timer0_alt then runs byte 1's period (then P0.3 high, ending motor B's
+settle) and byte 2's (then the busy flag clears). Class 0 uses a fixed
+delay instead (00C9h).""",
+
+0x04ED: """\
+Step period from a ramp table: acceleration index R4 (rising to the ramp
+length R1) or steps remaining R3, whichever is smaller. For motor B
+(2Dh.3), the step where they are equal uses entry R4 + R1, from the second
+table at 05E3h. The entry x B is subtracted from Timer 0.""",
+
+0x0928: """\
+Unprompted status report: when an event is pending (28h.3) and the
+transmitter is free, send 29h with bit 5 clear (unless a command reply is
+pending), then reset 29h to 20h.""",
 
 0x0F77: """\
 Motor B, 96-position circular axis. Target must be 01h-60h. Distance from
@@ -410,6 +434,9 @@ COMMENTS = {
     0x095E: 'status out on P3.7',
     0x0965: 'inverted status out on P3.6',
     0x044D: 'debounced: read INT1 twice',
+    0x02AF: 'motor A count x 3: one unit = 3 half-steps',
+    0x035E: 'motor B: 2 steps per position',
+    0x03B9: 'P0.3 low: motor B settling',
 }
 
 TABLE_COMMENTS = {
@@ -418,9 +445,9 @@ TABLE_COMMENTS = {
     0x05C5: 'A = ramp table 05C5h',
     0x039A: 'A = 3-phase table entry',
     0x04CC: 'A = half-step table entry',
-    0x01DF: 'A = speed setting',
-    0x01E2: 'A = speed setting',
-    0x01E5: 'A = speed setting',
+    0x01DF: 'A = post-move timing',
+    0x01E2: 'A = post-move timing',
+    0x01E5: 'A = post-move timing',
     0x0FBE: 'A = packed speed classes',
 }
 
@@ -428,17 +455,18 @@ DATA = [
     (0x0008, 0x000B, 'bytes', 'Padding'),
     (0x000E, 0x0013, 'bytes', 'Padding'),
     (0x001E, 0x0023, 'bytes', 'Padding'),
-    (0x01DF, 0x01E8, 'bytes', 'Timer 0 speed settings, one per speed class: TH0 reload, then bank 1 R2 and R3'),
+    (0x01DF, 0x01E8, 'bytes', 'Post-move timing for speed classes 1-3: P2.6 pulse length, then two Timer 0 periods\n(bank 1 R2: until P0.3 goes high; R3: until the busy flag clears)'),
     (0x039B, 0x03A1, 'bytes', 'Motor B 3-phase table, entries 1-6 (entry 0 is the RET at 039Ah, entry 7 the byte at 03A1h)'),
     (0x04D1, 0x04DB, 'bytes', 'Half-step table at 04CCh, entries 5-14 (the other entries overlap code)'),
-    (0x057D, 0x058A, 'bytes', 'Ramp table, 13 entries: 98h, 3Fh, 31h, 24h ... 14h (used by ramp_c)'),
+    (0x057D, 0x058A, 'bytes', 'Motor A ramp, 13 entries: 98h, 3Fh, 31h, 24h ... 14h (used by ramp_a)'),
     (0x058A, 0x05C5, 'bytes', 'Motor C period profile, indexed by R5: each move uses three consecutive entries\n'
                               '(start, after 12 steps, last 7 steps). Entry x B0h or 40h is subtracted from Timer 1.\n'
                               'The repeating 1Ch 12h 0Bh run looks like filler. Index 39h = 00h, 3Ah = B7h.'),
-    (0x05C5, 0x0601, 'bytes', 'Ramp tables at 05C5h, used with different offsets.\n'
-                              '05C5h: C9h, 64h, 4Ah, 3Eh, 36h ... about 96/sqrt(n) + 4.\n'
-                              '05E3h: ACh, 7Eh, 78h, 6Dh, 64h ... a gentler ramp.\n'
-                              'Step delays proportional to 1/sqrt(n) give constant acceleration.'),
+    (0x05C5, 0x0601, 'bytes', 'Motor B ramp tables.\n'
+                              '05C5h, 29 entries: C9h, 64h, 4Ah, 3Eh, 36h ... about 96/sqrt(n) + 4.\n'
+                              'Step delays proportional to 1/sqrt(n) give constant acceleration.\n'
+                              '05E3h: ACh, 7Eh, 78h, 6Dh, 64h ... for the one step where acceleration\n'
+                              'turns into deceleration (index R4 + R1). 0600h (48h): the last step.'),
     (0x07BB, 0x0800, 'bytes', 'Unprogrammed (FFh) up to the 2 KB boundary at 0800h'),
     (0x0FBE, 0x0FD7, 'bytes', 'Carousel sequence speed classes: 2 bits per R7 value, 4 per byte, 100 entries\n(R7 only reaches 52h; see sequence_speed_class)'),
     (0x0FFA, 0x1000, 'bytes', 'Padding (FFh) and a final 00h'),

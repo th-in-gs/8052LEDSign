@@ -107,18 +107,29 @@ written through a copy kept in internal RAM, so the other half of the port
 is left unchanged. The outputs idle high, so coils appear to be driven
 active-low: a 0 bit switches a coil on.
 
-| Motor | Output pins                | Phase variable            | Next-pattern table | Driven from              | Type              |
-| ----- | -------------------------- | ------------------------- | ------------------ | ------------------------ | ----------------- |
-| A     | P0.4–P0.7                  | internal 0x43             | 0x04CC             | Timer 0                  | 4-wire, half-step |
-| B     | P0.0–P0.2 (P0.3 held high) | internal 0x41             | 0x039A             | Timer 0                  | 3-phase, 6-step   |
-| C     | P1.0–P1.3                  | internal 0x11 (bank 2 R1) | 0x04CC             | Timer 1                  | 4-wire, half-step |
-| D     | P1.4–P1.7                  | internal 0x0E (bank 1 R6) | 0x04CC             | Motion loop, fixed delay | 4-wire, half-step |
+| Motor | Output pins                 | Phase variable            | Next-pattern table | Driven from              | Type              |
+| ----- | --------------------------- | ------------------------- | ------------------ | ------------------------ | ----------------- |
+| A     | P0.4–P0.7                   | internal 0x43             | 0x04CC             | Timer 0                  | 4-wire, half-step |
+| B     | P0.0–P0.2 (P0.3: see below) | internal 0x41             | 0x039A             | Timer 0                  | 3-phase, 6-step   |
+| C     | P1.0–P1.3                   | internal 0x11 (bank 2 R1) | 0x04CC             | Timer 1                  | 4-wire, half-step |
+| D     | P1.4–P1.7                   | internal 0x0E (bank 1 R6) | 0x04CC             | Motion loop, fixed delay | 4-wire, half-step |
 
 The Timer 0 interrupt steps either motor A or motor B, whichever is moving.
 Motor D is stepped by the motion loop itself (0x026C), with a fixed delay
 between steps, so it is slow and has no acceleration ramp. An earlier
 version of this analysis missed motor D: its output routine (0x0256) writes
 the high half of P1, next to motor C.
+
+**Step units differ by motor.** Motor A's counts are multiplied by 3
+(0x02AC): one unit is 3 half-steps. Motor B moves 2 steps per carousel
+position (0x035E). Motor C and motor D counts are single half-steps. All
+motor A figures below are in units unless stated.
+
+**P0.3, motor B's spare line.** The phase table always sets bit 3, so P0.3
+is not a coil. It goes low on motor B's last step (0x03B9) and high again
+after a delay (0x00CB or 0x0973). Since outputs are active-low, something is
+switched on while the carousel settles: extra holding current, a brake or a
+detent solenoid.
 
 **Next-pattern tables.** Each step looks up the current 4-bit pattern; the
 high 4 bits of the table entry are the next pattern in one direction, the
@@ -150,7 +161,7 @@ low 4 bits in the other.
   0x03C0 (960), then returns to a saved position afterwards: probably
   lifting something clear.
 - **Motor A: one-way rotary mechanism with a position flag.** The host can
-  move it by up to 2047 half-steps in either direction, and the front-panel
+  move it by up to 2047 units (6141 half-steps) in either direction, and the front-panel
   keys jog it. But both of its automatic actions (0xC1 0x04 and 0xC1 0x08)
   turn it the same way and stop relative to the two edges of one sensor
   signal. That pattern suits a cam, crank or rotary valve that always turns
@@ -170,7 +181,7 @@ differently:
 | C     | Switch on the INT1 pin (P3.3)                  | Two-phase: fast approach to the switch, slow back-off, offset | Every reset (0x0064)        |
 | A     | Shift-register input bit 0                     | Stop a fixed distance past a rising or falling edge           | First 0xC1 0x04/0x08 action |
 | D     | None for position. P2.5 stops it (fault/limit) | Overdrive against a hard stop, then back off                  | Every reset (0x0F61)        |
-| B     | None found                                     | 99 single steps while motor C is parked past its switch       | Every reset (0x0088)        |
+| B     | None found                                     | 99 one-position moves while motor C is parked past its switch | Every reset (0x0088)        |
 
 **Motor C** (`motion_init`, 0x0064):
 1. Back off 50 half-steps.
@@ -188,14 +199,16 @@ differently:
 **Motor A** (0x0325 and 0x033B): during every motor A step, the firmware
 reads the shift register. With flag 0x2B.0 set it watches for bit 0 going
 low; with 0x2B.1 set, for bit 0 going high. When the edge arrives, the rest
-of the move is cut to exactly 16 half-steps, using a second pass if needed.
+of the move is cut to exactly 16 half-steps (not units), using a second
+pass if needed.
 The two actions that use this:
 
-- **0xC1 0x04** (0x0E46): search up to 576 half-steps for the rising edge.
-  Then 16 + 116 half-steps, a pulse on pin P2.4, then 88 more. Sets flag
-  0x2B.2.
-- **0xC1 0x08** (0x0E9D): search up to 1318 half-steps for the falling edge.
-  Then 16 + 900 half-steps. Clears 0x2B.2. 0xC1 0x04 runs this first when
+- **0xC1 0x04** (0x0E46): search up to 576 units (1728 half-steps) for the
+  rising edge. Then 16 half-steps, 116 units (348 half-steps), a pulse on
+  pin P2.4, then 88 units (264 half-steps). Sets flag 0x2B.2.
+- **0xC1 0x08** (0x0E9D): search up to 1318 units (3954 half-steps) for the
+  falling edge. Then 16 half-steps and 900 units (2700 half-steps). Clears
+  0x2B.2. 0xC1 0x04 runs this first when
   0x2B.2 is set.
 - If the edge is not found, error bits are set in the status byte, a fault
   latch (flag 0x23.1) blocks further motion commands, and the carousel parks.
@@ -220,20 +233,20 @@ probably means "motor A mechanism fitted".
   means "stop motor D": an end-of-travel, jam or safety input.
 
 **Motor B** has no sensor that the code reads. At reset, `motion_init`
-steps it 99 times, as 99 separate one-step moves (0x0088), then sets its
-position to 1. Some observations:
+moves it 99 positions, as 99 separate one-position moves of 2 steps each
+(0x0088), then sets its position to 1. Some observations:
 
-- 99 is just over one revolution of 96. Merely locking the rotor to the
+- 99 positions is just over one revolution of 96. Merely locking the rotor to the
   drive phases would need about 6 steps; a full turn is only needed when
   searching the whole circle for something.
-- Single, separate steps are what makes a stepper stall cleanly against an
+- Short, separate moves are what makes a stepper stall cleanly against an
   obstruction. A 3-phase variable-reluctance motor has no magnet, so
   stalling against a stop does it no harm.
 - A **permanent** stop is ruled out: `set_b_target` moves through the 96→1
   wrap (from position 1 to 96 is one step backwards), and the automatic
   sequence moves both ways by uneven amounts. Some legal move would hit any
   fixed stop.
-- The 99 steps happen **while motor C is parked 36 half-steps past its home
+- The 99 moves happen **while motor C is parked 36 half-steps past its home
   switch**, between steps 4 and 5 of motor C's homing. Normal motor C
   positions start after the step 6 offset, so that overtravel zone is
   reached only during homing.
@@ -253,7 +266,7 @@ stop, low to medium for the motor C arm.
 Flag 0x22.6, reported to the host as status bit 0x29.6, marks the machine
 as **parked**:
 
-- Parking (`b_to_position_1`, 0x0AE7) moves the carousel to position 1,
+- Parking (`park`, 0x0AE7) moves the carousel to position 1,
   motor C to position 960 and motor D to state 1.
 - The machine starts parked after every reset.
 - Any accepted 0xC0 command with bit 2 of its second byte clear parks the
@@ -292,18 +305,40 @@ or burn-in mode for service use.
 
 ### Speed tables
 
-- **0x05C5:** `C9 64 4A 3E 36 31 2C 29 27 24 …` (201, 100, 74, 62, 54 …). It
-  fits about 96/√n + 4, apart from the first entry (0xC9), which is an
-  outlier. Step delays proportional to 1/√n give constant acceleration, the
-  classic stepper ramp. 0x05E3, directly after it, holds a gentler ramp
-  (`AC 7E 78 6D 64 …`). The code only references 0x05C5 (twice, with
-  different parameters in register B), so the second is presumably reached
-  by offset; not verified.
-- **0x057D:** a 13-entry ramp, `98 3F 31 24 … 14` (used by 0x031A).
-- **0x01DF–0x01E7: three speed settings for Timer 0.** Three 3-byte entries:
-  a TH0 reload value and two parameters copied to bank 1 R2/R3. Flags 0x2A.0
-  and 0x2A.1 (a 2-bit speed class) pick the entry. The same routine (0x01A6)
-  sets pin P3.5 high for the first entry and low otherwise.
+All step-period ramps go through `ramp_lookup` (0x04ED). It keeps an
+acceleration index (R4) that rises by one per step up to the ramp length
+(R1), and uses the smaller of it and the steps remaining (R3), so a move
+speeds up, cruises and slows down symmetrically. The table entry times a
+multiplier (register B) is subtracted from the timer count, so bigger
+entries mean longer steps.
+
+- **0x05C5: motor B's ramp,** 29 entries (R1 = 0x1D): `C9 64 4A 3E 36 31 2C
+  29 27 24 …` (201, 100, 74, 62, 54 …). It fits about 96/√n + 4, apart from
+  the first entry (0xC9), which is an outlier. Step delays proportional to
+  1/√n give constant acceleration, the classic stepper ramp.
+- **0x05E3: motor B's turnover table,** directly after it: `AC 7E 78 6D 64 …`.
+  It is reached by offset: when the acceleration index equals the steps
+  remaining, the point where speeding up turns into slowing down, the
+  lookup uses index R4 + R1 instead (0x0500). So exactly one step per move
+  takes its period from this table, longer for short moves. Only motor B
+  does this (the check is on its moving flag, 0x2D.3). The entry at 0x0600
+  (0x48) is the period of motor B's last step (0x03BE).
+- **0x057D: motor A's ramp,** 13 entries: `98 3F 31 24 … 14`, through
+  `ramp_a` (0x031A). Earlier versions called this a motor C ramp.
+- **0x01DF–0x01E7: post-move timing for motor B and C moves.** Three 3-byte
+  entries, one for each speed class 1–3 (flags 0x2A.0/0x2A.1); class 0 uses
+  a fixed delay instead (0x0537). After the last step, `post_move_timing`
+  (0x01A6):
+  1. sets P3.5 high for class 1 and low for classes 2 and 3;
+  2. pulls P2.6 low for one Timer 0 period set by byte 0 (about 4.5–5.4 ms
+     at 11.0592 MHz);
+  3. marks the mechanism busy.
+
+  Then Timer 0 runs two more periods (0x0EFF, `timer0_alt`): byte 1 (about
+  8.3, 5.8 or 4.2 ms), after which P0.3 goes high; then byte 2 (about 16.9,
+  8.9 or 8.0 ms), after which the busy flag clears and the next move can
+  start. So the speed class also chooses how long the carousel settles
+  before the next move: shorter for the faster classes.
 - **0x0FBE: carousel sequence speed classes.** Packed 4 to a byte, 2 bits
   each, 100 entries. 0x0F9F indexes it by R7 in the scripted carousel
   sequence (R7 ÷ 4 picks the byte, R7 mod 4 the bit pair) and copies the
@@ -347,8 +382,8 @@ except as described above:
 | 5, 6      | Jog motor A one way / the other, faster while held                 | —        |
 | 3 + 4     | Start the automatic sequence                                       | —        |
 | 3         | Cycle motor D: 96 to state 0, 74 back to state 1 (needs P2.5 high) | —        |
-| 2         | Pulse P2.4, then 88 half-steps of motor A                          | —        |
-| 1         | No host: move motor A 1056 half-steps                              | Same     |
+| 2         | Pulse P2.4, then 88 units (264 half-steps) of motor A              | —        |
+| 1         | No host: move motor A 1056 units (3168 half-steps)                 | Same     |
 | 4         | —                                                                  | —        |
 
 With a host connected (after the start-up handshake), presses of keys 1–4
@@ -359,15 +394,18 @@ table is a simplification.
 
 ### Outputs other than motors
 
-- **P2.4:** pulsed during motor A's 0xC1 0x04 action, between the 116- and
+- **P0.3:** low from motor B's last step until the settle time ends (see
+  "Motors and phase outputs" and the post-move timing).- **P2.4:** pulsed during motor A's 0xC1 0x04 action, between the 116- and
   88-step moves, and by key 2. A signal to other equipment that the
   mechanism has reached a point in its cycle.
 - **P2.3:** pulsed at the start of the 0xC1 0x04 action (0x0E59). The same
   pin is read as the option input at reset; 8051 port pins can do both.
 - **P2.7:** high while motor C is moving (set at 0x03F0, cleared at 0x045E).
   Perhaps a driver enable or current boost.
-- **P2.6:** pulsed low while the Timer 0 speed setting is loaded (0x01C7).
-- **P3.5** (normally T1): set or cleared with the Timer 0 speed setting.
+- **P2.6:** pulsed low for about 5 ms after a motor B/C move at speed
+  classes 1–3 (0x01C7): an "arrived" strobe.
+- **P3.5** (normally T1): high after a class 1 move, low after class 2 or 3
+  (motor B/C moves).
 - **P3.7** (normally RD) and **P3.6** (normally WR, inverted): status from
   the main loop.
 
@@ -397,7 +435,7 @@ Decoded at 0x0D5E and 0x0B05. First byte (R7), second byte (R6):
 | First byte                         | Second byte                                | Action                                                                                                                                                                      |
 | ---------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0x00–0x7F                          | bit 7: speed bit; bits 0–6: motor B target | Combined move: motor B to position R6 (1–0x60, shortest path), and motor C by (R7 bits 0–4) × 2 half-steps, direction R7 bit 6. R7 bit 5 and R6 bit 7 form the speed class. |
-| 0x80–0x8F                          | count low                                  | Motor A: move ((R7 bits 0–2) × 256 + R6) half-steps, direction R7 bit 3.                                                                                                    |
+| 0x80–0x8F                          | count low                                  | Motor A: move ((R7 bits 0–2) × 256 + R6) units of 3 half-steps, direction R7 bit 3.                                                                                         |
 | 0x90–0x9F                          | count low (bit 0 ignored)                  | Motor C: move by ((R7 bits 0–2) × 256 + R6) half-steps, direction R7 bit 3, within the 0–0x0C60 limit.                                                                      |
 | 0xA0–0xAF                          | bits 0–6: motor B target                   | Motor B to position R6 (1–0x60), speed class R7 bits 0–1.                                                                                                                   |
 | 0xB0–0xBF                          |                                            | Rejected.                                                                                                                                                                   |
@@ -408,9 +446,9 @@ Decoded at 0x0D5E and 0x0B05. First byte (R7), second byte (R6):
 | 0xC1                               | 0x40                                       | Enter read mode.                                                                                                                                                            |
 | 0xC1                               | 0x20                                       | Motor D to state 1, if not already there.                                                                                                                                   |
 | 0xC1                               | 0x10                                       | Park: carousel to position 1, motor C to 960, motor D to state 1.                                                                                                           |
-| 0xC1                               | 0x08                                       | Motor A action: to the falling edge of its flag, then 916 half-steps on. Needs P2.3 high.                                                                                   |
-| 0xC1                               | 0x04                                       | Motor A action: to the rising edge, 132 half-steps, pulse P2.4, 88 more. Needs P2.3 high.                                                                                   |
-| 0xD0, 0xD1, 0xD2, 0xD4, 0xD8, 0xDE | 0x00                                       | In read mode: reply with internal RAM byte 0x30, 0x31, 0x32, 0x33, 0x34 or 0x3B (0x3B is the P2.3 option byte). Outside read mode these go to 0x0A93, not decoded.          |
+| 0xC1                               | 0x08                                       | Motor A action: to the falling edge of its flag, then 2716 half-steps on. Needs P2.3 high.                                                                                  |
+| 0xC1                               | 0x04                                       | Motor A action: to the rising edge, 364 half-steps, pulse P2.4, 264 more. Needs P2.3 high.                                                                                  |
+| 0xD0, 0xD1, 0xD2, 0xD4, 0xD8, 0xDE | 0x00                                       | Read a status byte (see "Status bytes"). Reply: the byte itself, not the usual status reply.                                                                                |
 | anything else                      |                                            | Rejected: error flags set.                                                                                                                                                  |
 
 For every accepted 0xC0 command, bit 6 of the second byte sets the parity
@@ -422,6 +460,46 @@ Motion commands (0x00–0xBF) are refused while parked, in read mode, or after
 a motor A fault (0x0D6E). Before moving, they put motor D in state 0. The
 0xC1 actions other than read mode are refused while parked, in read mode or
 after a motor A fault. Moves are refused while another is in progress.
+
+### Status bytes
+
+The node reports status in one byte, and keeps details in five more that
+the host reads with the 0xD_ commands (0x0A54).
+
+**The status reply** (internal 0x29). Sent in reply to every command except
+the 0xD_ reads, and to a frame that fails its parity check. It is also sent
+unprompted when a key is pressed or a fault occurs (main loop, 0x0928).
+
+| Bit | Meaning                                                               |
+| --- | --------------------------------------------------------------------- |
+| 5   | 1 = reply to a command, 0 = unprompted report                         |
+| 1   | Error details waiting in byte 0x23 (read with `D1 00`)                |
+| 2   | Key press waiting in byte 0x24 (`D2 00`)                              |
+| 3   | Last frame had a parity error and was discarded (detail in byte 0x25) |
+| 6   | The machine was parked (by this command, or by a reset)               |
+
+Bits 0, 4 and 7 are always 0. Between reports the byte is reset to 0x20.
+
+**Detail bytes.** All have bit 7 set, and reset to 0x80.
+
+| Command | Byte | Contents                                                                                                                                           | Reading it                                 |
+| ------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `D0 00` | 0x22 | Summary. Bit 1, 2, 3 = bytes 0x23, 0x24, 0x25 hold unread news. Bit 5 = ready (cleared while a frame is processed). Bit 6 = parked.                | Sets bit 5                                 |
+| `D1 00` | 0x23 | Errors. Bit 0 = motor A flag low or position unknown. Bit 1 = motor A flag edge not found. Bit 3 = P2.5 stopped motor D. Bit 4 = command rejected. | Clears bit 4 and the news bit; faults stay |
+| `D2 00` | 0x24 | Keys. Bit 6 = key 1, bit 4 = key 2, bit 3 = key 3, bit 2 = key 4, bit 0 = keys 1 and 4 together.                                                   | Resets to 0x80                             |
+| `D4 00` | 0x25 | Communication. Bit 3 = parity error.                                                                                                               | Resets to 0x80                             |
+| `D8 00` | 0x26 | Fault code: 0x91 = 0xC1 0x04 action failed, 0xB1 = 0xC1 0x08 action failed.                                                                        | Unchanged                                  |
+| `DE 00` | 0x3B | The P2.3 option byte: 0xA5 = fitted, 0xA0 = not.                                                                                                   | Unchanged                                  |
+
+Each read also copies the byte into a snapshot at 0x30–0x34. **Read mode**
+(`C1 40`, left with `C0 02`) makes the same 0xD_ commands return the
+snapshots instead, without clearing anything. That lets a host fetch a
+reply again after a transmission error without losing the information.
+
+The fault bits are latched. Motor A's "edge not found" (bit 1) clears only
+on a re-initialise (`C0 01`) or reset. Motor D's (bit 3) clears when key 3
+cycles motor D. "Flag low or unknown" (bit 0) clears when the flag reads
+high or a 0xC1 0x04 action succeeds.
 
 ### Start-up and self-test
 
@@ -491,9 +569,20 @@ link speculative.
 
 ## Open questions
 
-- What the mechanisms are physically. Nothing beyond the code is known.
+Not answerable from the code alone:
+
+- What the mechanisms are physically, and what the product is.
 - How the carousel (motor B) finds position 1: a stop engaged by motor C's
   overtravel, an operator-indexed tray, or something else.
-- What P2.5 and the T0 interlock are connected to.
-- What the Timer 0 speed-setting parameters (bank 1 R2/R3) control.
-- Whether 0x05E3 is a separate ramp reached by offset.
+- What P2.5, the T0 interlock, P0.3 and the P2.3, P2.4, P2.6 and P2.7
+  outputs are connected to.
+- The original crystal frequency, and so the baud rate and timings.
+
+Still open in the code:
+
+- The full gating of the front-panel keys (flags 0x28.4, 0x28.7, 0x2B.5).
+- What flag 0x2C.2 does during motor B's homing.
+- Why the first entry of motor B's ramp (0xC9) is an outlier.
+- Whether the scripted carousel sequence's move sizes have a pattern.
+- Why P2.3 is both an option input and a pulsed output. A jumper pulling it
+  low would hide the pulse, so it may really be a bidirectional handshake.

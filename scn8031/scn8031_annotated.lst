@@ -136,7 +136,7 @@ L00AE:                  ; from 0070 007C 0091 009E 00AB 06FE +9
   00BE  C2 7E      CLR 2Fh.6
   00C0  11 D6      ACALL L00D6
   00C2  20 61 04   JB 2Ch.1,L00C9
-  00C5  31 A6      ACALL timer1_setup
+  00C5  31 A6      ACALL post_move_timing
   00C7  80 07      SJMP L00D0
 
 L00C9:                  ; from 00C2
@@ -236,7 +236,8 @@ L0146:                  ; from 013F
   0150  22         RET
 
 ; Timer 0: steps motor A (P0 high nibble) or motor B (P0 low nibble),
-; whichever is moving. When bit 27h.7 is set, timer0_alt runs instead.
+; whichever is moving. When bit 27h.7 is set, timer0_alt (post-move timing)
+; runs instead.
 TIMER0_ISR:             ; from 000B
   0151  30 3F 05   JNB 27h.7,L0159
   0154  12 09 69   LCALL timer0_alt
@@ -296,7 +297,12 @@ L019D:                  ; from 0197
   01A3  D0 E0      POP ACC
   01A5  32         RETI
 
-timer1_setup:           ; from 00C5
+; After a motor B/C move at speed class 1-3: P3.5 = class 1, P2.6 low for one
+; Timer 0 period (byte 0 of the entry at 01DFh), then mark the mechanism busy.
+; timer0_alt then runs byte 1's period (then P0.3 high, ending motor B's
+; settle) and byte 2's (then the busy flag clears). Class 0 uses a fixed
+; delay instead (00C9h).
+post_move_timing:       ; from 00C5
   01A6  53 89 F0   ANL TMOD,#F0h
   01A9  53 A8 88   ANL IE,#88h
   01AC  90 01 DF   MOV DPTR,#01DFh
@@ -329,7 +335,8 @@ L01D5:                  ; from 01D5
   01DC  D2 5F      SETB 2Bh.7
   01DE  22         RET
 
-; Timer 0 speed settings, one per speed class: TH0 reload, then bank 1 R2 and R3
+; Post-move timing for speed classes 1-3: P2.6 pulse length, then two Timer 0 periods
+; (bank 1 R2: until P0.3 goes high; R3: until the busy flag clears)
   01DF  DB 7Fh, E2h, C3h, 70h, EBh, E0h, 65h, F1h, E3h
 
 ; Motor D, P1 bits 4-7: a two-position mechanism about 74 half-steps between
@@ -484,7 +491,7 @@ L0298:                  ; from 013B 0142
   02A7  20 7B 13   JB 2Fh.3,L02BD
   02AA  E5 3D      MOV A,3Dh
   02AC  75 F0 03   MOV B,#03h
-  02AF  A4         MUL AB
+  02AF  A4         MUL AB                    ; motor A count x 3: one unit = 3 half-steps
   02B0  FB         MOV R3,A
   02B1  AA F0      MOV R2,B
   02B3  E5 3C      MOV A,3Ch
@@ -508,7 +515,7 @@ L02C1:                  ; from 02BB
   02CE  F5 8C      MOV TH0,A
   02D0  C2 8C      CLR TR0
   02D2  C2 8D      CLR TF0
-  02D4  71 1A      ACALL ramp_c
+  02D4  71 1A      ACALL ramp_a
   02D6  43 A8 82   ORL IE,#82h
   02D9  51 DC      ACALL next_phase_a
 
@@ -553,7 +560,7 @@ L02F9:                  ; from 013D 0144 0316
   0300  20 79 08   JB 2Fh.1,L030B
   0303  51 DC      ACALL next_phase_a
   0305  71 25      ACALL check_a_flag
-  0307  71 1A      ACALL ramp_c
+  0307  71 1A      ACALL ramp_a
   0309  80 0B      SJMP L0316
 
 L030B:                  ; from 0300
@@ -567,7 +574,7 @@ L0316:                  ; from 02F9 0309
   0316  20 7A E0   JB 2Fh.2,L02F9
   0319  22         RET
 
-ramp_c:                 ; from 02D4 0307
+ramp_a:                 ; from 02D4 0307
   031A  79 0C      MOV R1,#0Ch
   031C  90 05 7D   MOV DPTR,#057Dh
   031F  75 F0 20   MOV B,#20h
@@ -624,7 +631,7 @@ L0357:                  ; from 010A
   0357  75 2D 20   MOV 2Dh,#20h
   035A  7C FF      MOV R4,#FFh
   035C  E5 10      MOV A,B_STEPS
-  035E  23         RL A
+  035E  23         RL A                      ; motor B: 2 steps per position
   035F  FB         MOV R3,A
   0360  7A 00      MOV R2,#00h
   0362  60 25      JZ L0389
@@ -686,7 +693,7 @@ L03AC:                  ; from 0113
 L03B5:                  ; from 03AE
   03B5  71 A1      ACALL output_phase_b
   03B7  D2 6A      SETB 2Dh.2
-  03B9  C2 83      CLR P0.3
+  03B9  C2 83      CLR P0.3                  ; P0.3 low: motor B settling
   03BB  53 44 F7   ANL P0_SHADOW,#F7h
   03BE  74 3B      MOV A,#3Bh
   03C0  75 F0 80   MOV B,#80h
@@ -918,6 +925,10 @@ L04EA:                  ; from 04E4 04E6
   04EA  A2 D5      MOV C,F0
   04EC  22         RET
 
+; Step period from a ramp table: acceleration index R4 (rising to the ramp
+; length R1) or steps remaining R3, whichever is smaller. For motor B
+; (2Dh.3), the step where they are equal uses entry R4 + R1, from the second
+; table at 05E3h. The entry x B is subtracted from Timer 0.
 ramp_lookup:            ; from 0322 03C6 03D1
   04ED  20 6A 25   JB 2Dh.2,L0515
   04F0  0C         INC R4
@@ -1033,7 +1044,7 @@ L057A:                  ; from 056C 056F 0572
   057A  D0 D0      POP PSW
   057C  22         RET
 
-; Ramp table, 13 entries: 98h, 3Fh, 31h, 24h ... 14h (used by ramp_c)
+; Motor A ramp, 13 entries: 98h, 3Fh, 31h, 24h ... 14h (used by ramp_a)
   057D  DB 98h, 3Fh, 31h, 24h, 20h, 1Dh, 1Bh, 1Ah, 18h, 17h, 16h, 15h, 14h
 
 ; Motor C period profile, indexed by R5: each move uses three consecutive entries
@@ -1044,10 +1055,11 @@ L057A:                  ; from 056C 056F 0572
   05AA  DB 1Ch, 12h, 0Bh, 1Ch, 12h, 0Bh, 1Ch, 12h, 0Bh, 1Ch, 12h, 0Bh, 1Ch, 12h, 0Bh, 1Ch
   05BA  DB 12h, 0Bh, 1Ch, 12h, 0Bh, 1Ch, 12h, 09h, 1Ch, 00h, B7h
 
-; Ramp tables at 05C5h, used with different offsets.
-; 05C5h: C9h, 64h, 4Ah, 3Eh, 36h ... about 96/sqrt(n) + 4.
-; 05E3h: ACh, 7Eh, 78h, 6Dh, 64h ... a gentler ramp.
+; Motor B ramp tables.
+; 05C5h, 29 entries: C9h, 64h, 4Ah, 3Eh, 36h ... about 96/sqrt(n) + 4.
 ; Step delays proportional to 1/sqrt(n) give constant acceleration.
+; 05E3h: ACh, 7Eh, 78h, 6Dh, 64h ... for the one step where acceleration
+; turns into deceleration (index R4 + R1). 0600h (48h): the last step.
   05C5  DB C9h, 64h, 4Ah, 3Eh, 36h, 31h, 2Ch, 29h, 27h, 24h, 23h, 21h, 20h, 1Eh, 1Dh, 1Ch
   05D5  DB 1Bh, 1Bh, 1Ah, 19h, 18h, 18h, 17h, 17h, 16h, 16h, 15h, 15h, 15h, 14h, ACh, 7Eh
   05E5  DB 78h, 6Dh, 64h, 5Dh, 58h, 53h, 4Fh, 4Bh, 48h, 45h, 43h, 41h, 3Fh, 3Dh, 3Bh, 39h
@@ -1564,6 +1576,9 @@ L091C:                  ; from 08E9
 L0926:                  ; from 0921
   0926  D2 AF      SETB EA
 
+; Unprompted status report: when an event is pending (28h.3) and the
+; transmitter is free, send 29h with bit 5 clear (unless a command reply is
+; pending), then reset 29h to 20h.
 L0928:                  ; from 091A 091C
   0928  C2 AF      CLR EA
   092A  30 43 24   JNB 28h.3,L0951
@@ -1787,8 +1802,10 @@ L0A50:                  ; from 0A38 0A49 0A4B
   0A50  7E 00      MOV R6,#00h
   0A52  A1 8C      AJMP L0D8C
 
-; Dxh 00 in read mode: reply with the byte at 30h (D0), 31h (D1), 32h (D2),
-; 33h (D4), 34h (D8) or OPTION_P23 (DE). Outside read mode: 0A93h.
+; Dxh 00: status reads. Normally: reply with 22h (D0, summary), 23h (D1,
+; errors), 24h (D2, keys), 25h (D4, communication), 26h (D8, fault code) or
+; OPTION_P23 (DE), copy it to the snapshot at 30h-34h, and clear what was
+; read (0A93h). In read mode: reply with the snapshot, clearing nothing.
 cmd_Dx:                 ; from 0D9E
   0A54  EE         MOV A,R6
   0A55  60 04      JZ L0A5B
