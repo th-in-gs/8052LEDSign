@@ -43,9 +43,9 @@ above this part's likely 12 MHz rating, but the dump is coherent. On NMOS
 basis of the classic 8051 ROM dump.
 
 There is no checksum to verify against: the 8-bit sum is 09h and no checksum
-routine was found. The code disassembles cleanly (3,824 of 4,096 bytes
-reached as code, 74 called routines), which is strong evidence the read is
-good. A second dump compared byte for byte would confirm it.
+routine was found. Instead, the chip was dumped twice and the two 16 KB
+captures are identical, byte for byte. The code also disassembles cleanly
+(3,824 of 4,096 bytes reached as code, 74 called routines).
 
 ## Overview
 
