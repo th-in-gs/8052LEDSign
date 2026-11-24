@@ -75,12 +75,20 @@ L0050:                  ; from 0045
   0050  75 41 06   MOV PHASE_B,#06h
   0053  75 90 6E   MOV P1,#6Eh
   0056  75 42 6E   MOV P1_SHADOW,#6Eh
-  0059  75 11 0E   MOV 11h,#0Eh
-  005C  75 0E 60   MOV 0Eh,#60h
-  005F  C2 A7      CLR P2.7
+  0059  75 11 0E   MOV PHASE_C,#0Eh
+  005C  75 0E 60   MOV PHASE_D,#60h
+  005F  C2 A7      CLR C_MOVING
   0061  B1 37      ACALL L0537
   0063  22         RET
 
+; Homing at reset (called with motors idle, after the interlock is high).
+; Motor C: back off 50 half-steps, then drive up to 0D98h (3480) towards home
+; with C_HOMING set; c_home_cutoff ends the move 36-37 half-steps after the
+; switch (INT1) trips. Motor B: 99 single-step moves (just over one turn of
+; 96) while C is parked past its switch; no sensor is read, so B probably
+; stalls against something C's overtravel puts in its path. Motor C: creep
+; back 2 half-steps at a time until the switch releases, then 12 more.
+; Position 0 is there.
 motion_init:            ; from 086C
   0064  75 2A 00   MOV 2Ah,#00h
   0067  75 10 00   MOV B_STEPS,#00h
@@ -90,9 +98,9 @@ motion_init:            ; from 086C
   0072  D2 56      SETB C_DIR
   0074  75 17 98   MOV 17h,#98h
   0077  75 16 0D   MOV 16h,#0Dh
-  007A  D2 60      SETB 2Ch.0
+  007A  D2 60      SETB C_HOMING
   007C  11 AE      ACALL L00AE
-  007E  C2 60      CLR 2Ch.0
+  007E  C2 60      CLR C_HOMING
   0080  75 41 06   MOV PHASE_B,#06h
   0083  75 18 63   MOV 18h,#63h
   0086  D2 62      SETB 2Ch.2
@@ -109,8 +117,8 @@ L0096:                  ; from 00A0 00A3
   0098  75 17 02   MOV 17h,#02h
   009B  75 10 00   MOV B_STEPS,#00h
   009E  11 AE      ACALL L00AE
-  00A0  30 B3 F3   JNB INT1,L0096
-  00A3  30 B3 F0   JNB INT1,L0096
+  00A0  30 B3 F3   JNB C_HOME,L0096
+  00A3  30 B3 F0   JNB C_HOME,L0096
   00A6  C2 62      CLR 2Ch.2
   00A8  75 17 0C   MOV 17h,#0Ch
   00AB  11 AE      ACALL L00AE
@@ -158,7 +166,7 @@ L00E3:                  ; from 00DC
   00EE  80 02      SJMP L00F2
 
 L00F0:                  ; from 00E9
-  00F0  51 6C      ACALL L026C
+  00F0  51 6C      ACALL d_step_tick
 
 L00F2:                  ; from 00EE
   00F2  80 0A      SJMP L00FE
@@ -167,7 +175,7 @@ L00F4:                  ; from 00E3
   00F4  91 4D      ACALL check_int1_sensor
   00F6  20 6B 05   JB 2Dh.3,L00FE
   00F9  20 7C 02   JB 2Fh.4,L00FE
-  00FC  B1 3F      ACALL L053F
+  00FC  B1 3F      ACALL scan_keys
 
 L00FE:                  ; from 00E1 00F2 00F6 00F9
   00FE  20 64 16   JB 2Ch.4,L0117
@@ -227,7 +235,7 @@ L0146:                  ; from 013F
   014E  D0 D0      POP PSW
   0150  22         RET
 
-; Timer 0: steps motor A (P0 low nibble) or motor B (P0 high nibble),
+; Timer 0: steps motor A (P0 high nibble) or motor B (P0 low nibble),
 ; whichever is moving. When bit 27h.7 is set, timer0_alt runs instead.
 TIMER0_ISR:             ; from 000B
   0151  30 3F 05   JNB 27h.7,L0159
@@ -324,25 +332,29 @@ L01D5:                  ; from 01D5
 ; Timer 0 speed settings, one per speed class: TH0 reload, then bank 1 R2 and R3
   01DF  DB 7Fh, E2h, C3h, 70h, EBh, E0h, 65h, F1h, E3h
 
-L01E8:                  ; from 09B4 0BC2 0F61
-  01E8  75 0D 60   MOV 0Dh,#60h
-  01EB  31 FE      ACALL L01FE
+; Motor D, P1 bits 4-7: a two-position mechanism about 74 half-steps between
+; states, state in D_STATE. Stepped from the motion loop (d_step_tick) at a
+; fixed rate. 96 steps towards state 0 overdrives it, presumably against a
+; hard stop. A move is refused once D_FAULT is set.
+d_to_state0_overdrive:  ; from 09B4 0BC2 0F61
+  01E8  75 0D 60   MOV D_STEPS,#60h
+  01EB  31 FE      ACALL run_d_move
   01ED  22         RET
 
-L01EE:                  ; from 0CB3 0D7A
-  01EE  75 0D 4A   MOV 0Dh,#4Ah
-  01F1  31 FE      ACALL L01FE
+d_to_state0:            ; from 0CB3 0D7A
+  01EE  75 0D 4A   MOV D_STEPS,#4Ah
+  01F1  31 FE      ACALL run_d_move
   01F3  22         RET
 
-L01F4:                  ; from 09B7 09DB 0AFD 0BC5 0F64 0F6A
-  01F4  D2 66      SETB 2Ch.6
-  01F6  75 0D 4A   MOV 0Dh,#4Ah
-  01F9  31 FE      ACALL L01FE
-  01FB  C2 66      CLR 2Ch.6
+d_to_state1:            ; from 09B7 09DB 0AFD 0BC5 0F64 0F6A
+  01F4  D2 66      SETB D_DIR
+  01F6  75 0D 4A   MOV D_STEPS,#4Ah
+  01F9  31 FE      ACALL run_d_move
+  01FB  C2 66      CLR D_DIR
   01FD  22         RET
 
-L01FE:                  ; from 01EB 01F1 01F9
-  01FE  20 1B 19   JB 23h.3,L021A
+run_d_move:             ; from 01EB 01F1 01F9
+  01FE  20 1B 19   JB D_FAULT,L021A
   0201  C0 D0      PUSH PSW
   0203  75 2E 10   MOV 2Eh,#10h
   0206  75 2D 20   MOV 2Dh,#20h
@@ -351,8 +363,8 @@ L01FE:                  ; from 01EB 01F1 01F9
   020E  D0 D0      POP PSW
   0210  C0 D0      PUSH PSW
   0212  B1 37      ACALL L0537
-  0214  A2 66      MOV C,2Ch.6
-  0216  92 42      MOV 28h.2,C
+  0214  A2 66      MOV C,D_DIR
+  0216  92 42      MOV D_STATE,C
   0218  D0 D0      POP PSW
 
 L021A:                  ; from 01FE
@@ -400,10 +412,10 @@ L0253:                  ; from 0234 0239 023D 0242 0246
 L0255:                  ; from 021E 0232 0251
   0255  22         RET
 
-L0256:                  ; from 0273
+step_d:                 ; from 0273
   0256  EE         MOV A,R6
   0257  C4         SWAP A
-  0258  A2 66      MOV C,2Ch.6
+  0258  A2 66      MOV C,D_DIR
   025A  91 CB      ACALL rotate_phase
   025C  C4         SWAP A
   025D  FE         MOV R6,A
@@ -416,11 +428,13 @@ L0256:                  ; from 0273
   0269  D2 AF      SETB EA
   026B  22         RET
 
-L026C:                  ; from 00F0
+; Motor D step, from the motion loop: count down a fixed delay (R4), then
+; check P2.5 and step. D_STEPS counts the steps.
+d_step_tick:            ; from 00F0
   026C  30 7C 0C   JNB 2Fh.4,L027B
   026F  DC 0A      DJNZ R4,L027B
-  0271  51 7C      ACALL L027C
-  0273  51 56      ACALL L0256
+  0271  51 7C      ACALL check_d_stop
+  0273  51 56      ACALL step_d
   0275  7C 31      MOV R4,#31h
   0277  DD 02      DJNZ R5,L027B
   0279  C2 7C      CLR 2Fh.4
@@ -428,9 +442,11 @@ L026C:                  ; from 00F0
 L027B:                  ; from 026C 026F 0277
   027B  22         RET
 
+; P2.5 low on two successive steps: report it (check_p25_input) and cut the
+; remaining motor D move to at most 12 steps.
 ;   Calls: check_p25_input
-L027C:                  ; from 0271
-  027C  20 A5 16   JB P2.5,L0295
+check_d_stop:           ; from 0271
+  027C  20 A5 16   JB D_STOP_IN,L0295
   027F  30 7D 0F   JNB 2Fh.5,L0291
   0282  20 03 03   JB 20h.3,L0288
   0285  12 07 6E   LCALL check_p25_input
@@ -506,6 +522,7 @@ L02DB:                  ; from 02A1
 ;   Motor A: P0 bits 4-7, half-step table at 04CCh.
 ;   Motor B: P0 bits 0-3, 3-phase table at 039Ah, bit 3 always set.
 ;   Motor C: P1 bits 0-3, half-step table at 04CCh.
+;   Motor D: P1 bits 4-7, half-step table at 04CCh (step_d).
 next_phase_a:           ; from 02C1 02D9 0303
   02DC  20 79 0E   JB 2Fh.1,L02ED
   02DF  E5 43      MOV A,PHASE_A
@@ -532,10 +549,10 @@ output_phase_a:         ; from 0166 02C3
 L02F9:                  ; from 013D 0144 0316
   02F9  30 78 1A   JNB 2Fh.0,L0316
   02FC  C2 78      CLR 2Fh.0
-  02FE  B1 3F      ACALL L053F
+  02FE  B1 3F      ACALL scan_keys
   0300  20 79 08   JB 2Fh.1,L030B
   0303  51 DC      ACALL next_phase_a
-  0305  71 25      ACALL L0325
+  0305  71 25      ACALL check_a_flag
   0307  71 1A      ACALL ramp_c
   0309  80 0B      SJMP L0316
 
@@ -557,26 +574,30 @@ ramp_c:                 ; from 02D4 0307
   0322  91 ED      ACALL ramp_lookup
   0324  22         RET
 
+; Motor A position flag: shift register bit 0 (in C). With A_STOP_ON_LOW set,
+; stop 16 steps after it goes low; with A_STOP_ON_HIGH, after it goes high.
 ;   Calls: read_shift_register
-L0325:                  ; from 0305
+check_a_flag:           ; from 0305
   0325  12 09 8A   LCALL read_shift_register ; read 8 bits from the external shift register
   0328  40 09      JC L0333
-  032A  30 58 04   JNB 2Bh.0,L0331
-  032D  71 3B      ACALL L033B
-  032F  C2 58      CLR 2Bh.0
+  032A  30 58 04   JNB A_STOP_ON_LOW,L0331
+  032D  71 3B      ACALL a_stop_in_16
+  032F  C2 58      CLR A_STOP_ON_LOW
 
 L0331:                  ; from 032A
   0331  80 07      SJMP L033A
 
 L0333:                  ; from 0328
-  0333  30 59 04   JNB 2Bh.1,L033A
-  0336  C2 59      CLR 2Bh.1
-  0338  71 3B      ACALL L033B
+  0333  30 59 04   JNB A_STOP_ON_HIGH,L033A
+  0336  C2 59      CLR A_STOP_ON_HIGH
+  0338  71 3B      ACALL a_stop_in_16
 
 L033A:                  ; from 0331 0333
   033A  22         RET
 
-L033B:                  ; from 032D 0338
+; Cut the remaining motor A move to 16 steps. If fewer remain, set 2Fh.3 so
+; run_move makes a second pass for the rest.
+a_stop_in_16:           ; from 032D 0338
   033B  BA 00 03   CJNE R2,#00h,L0341
   033E  BB 10 00   CJNE R3,#10h,L0341
 
@@ -683,7 +704,7 @@ L03C9:                  ; from 037C 03B1
   03D3  22         RET
 
 L03D4:                  ; from 00DF
-  03D4  B1 67      ACALL L0567
+  03D4  B1 67      ACALL check_interlock
   03D6  75 2E 18   MOV 2Eh,#18h
   03D9  AB 17      MOV R3,17h
   03DB  AA 16      MOV R2,16h
@@ -697,7 +718,7 @@ L03D4:                  ; from 00DF
   03EB  4B         ORL A,R3
   03EC  60 34      JZ L0422
   03EE  7C 00      MOV R4,#00h
-  03F0  D2 A7      SETB P2.7
+  03F0  D2 A7      SETB C_MOVING
   03F2  91 34      ACALL next_phase_c
   03F4  D2 8E      SETB TR1
   03F6  91 43      ACALL output_phase_c
@@ -772,18 +793,18 @@ output_phase_c:         ; from 0195 03F6
   044C  22         RET
 
 check_int1_sensor:      ; from 00F4
-  044D  20 B3 05   JB INT1,L0455             ; debounced: read INT1 twice
-  0450  20 B3 02   JB INT1,L0455
-  0453  D2 76      SETB 2Eh.6
+  044D  20 B3 05   JB C_HOME,L0455           ; debounced: read INT1 twice
+  0450  20 B3 02   JB C_HOME,L0455
+  0453  D2 76      SETB C_HOME_HIT
 
 L0455:                  ; from 044D 0450
   0455  20 71 06   JB 2Eh.1,L045E
   0458  91 34      ACALL next_phase_c
-  045A  91 B3      ACALL L04B3
+  045A  91 B3      ACALL c_home_cutoff
   045C  80 0D      SJMP L046B
 
 L045E:                  ; from 0455
-  045E  C2 A7      CLR P2.7
+  045E  C2 A7      CLR C_MOVING
   0460  D2 72      SETB 2Eh.2
   0462  20 77 04   JB 2Eh.7,L0469
   0465  7D 39      MOV R5,#39h
@@ -843,10 +864,12 @@ L04AE:                  ; from 04A6
   04B0  D2 AF      SETB EA
   04B2  22         RET
 
-L04B3:                  ; from 045A
-  04B3  30 60 0D   JNB 2Ch.0,L04C3
-  04B6  30 76 0A   JNB 2Eh.6,L04C3
-  04B9  C2 60      CLR 2Ch.0
+; While homing, once the switch has been seen, cut the remaining motor C
+; count to 24h steps, keeping the phase (bit 0).
+c_home_cutoff:          ; from 045A
+  04B3  30 60 0D   JNB C_HOMING,L04C3
+  04B6  30 76 0A   JNB C_HOME_HIT,L04C3
+  04B9  C2 60      CLR C_HOMING
   04BB  7A 00      MOV R2,#00h
   04BD  EB         MOV A,R3
   04BE  54 01      ANL A,#01h
@@ -963,8 +986,10 @@ L0537:                  ; from 0061 00C9 0212
   053B  12 0E D7   LCALL wait_polling_inputs ; wait, polling the shift register inputs
   053E  22         RET
 
+; Front-panel keys: report a change once the same non-zero value has been
+; read 5 times in a row (flag 2Ch.7 for key_handler).
 ;   Calls: read_shift_register
-L053F:                  ; from 00FC 02FE
+scan_keys:              ; from 00FC 02FE
   053F  C0 D0      PUSH PSW
   0541  E4         CLR A
   0542  F5 D0      MOV PSW,A
@@ -988,17 +1013,19 @@ L055E:                  ; from 054A 0557
   0560  C2 47      CLR 28h.7
 
 L0562:                  ; from 0547 055E
-  0562  B1 67      ACALL L0567
+  0562  B1 67      ACALL check_interlock
   0564  D0 D0      POP PSW
   0566  22         RET
 
-L0567:                  ; from 03D4 0562
+; Interlock: INTERLOCK (T0 pin) low, read twice, while not parked -> restart
+; the firmware, which re-homes everything.
+check_interlock:        ; from 03D4 0562
   0567  C0 D0      PUSH PSW
   0569  E4         CLR A
   056A  F5 D0      MOV PSW,A
-  056C  20 B4 0B   JB T0,L057A
-  056F  20 16 08   JB 22h.6,L057A
-  0572  20 B4 05   JB T0,L057A
+  056C  20 B4 0B   JB INTERLOCK,L057A
+  056F  20 16 08   JB PARKED,L057A
+  0572  20 B4 05   JB INTERLOCK,L057A
   0575  C2 AF      CLR EA
   0577  02 08 0A   LJMP start
 
@@ -1026,8 +1053,10 @@ L057A:                  ; from 056C 056F 0572
   05E5  DB 78h, 6Dh, 64h, 5Dh, 58h, 53h, 4Fh, 4Bh, 48h, 45h, 43h, 41h, 3Fh, 3Dh, 3Bh, 39h
   05F5  DB 38h, 37h, 36h, 34h, 33h, 32h, 31h, 31h, 30h, 2Fh, 1Eh, 48h
 
-;   Calls: read_shift_register, L0E29, wait_polling_inputs
-L0601:                  ; from 0B9E
+; Jog motor A while key 5 (one way) or key 6 (the other) is held: a short
+; move, then longer moves as long as the key stays down.
+;   Calls: read_shift_register, check_a_flag_idle, wait_polling_inputs
+jog_a:                  ; from 0B9E
   0601  20 64 79   JB 2Ch.4,L067D
   0604  20 03 76   JB 20h.3,L067D
   0607  12 09 8A   LCALL read_shift_register ; read 8 bits from the external shift register
@@ -1037,7 +1066,7 @@ L0601:                  ; from 0B9E
   0613  C2 57      CLR A_DIR
   0615  75 3D 02   MOV 3Dh,#02h
   0618  31 29      ACALL run_move
-  061A  12 0E 29   LCALL L0E29
+  061A  12 0E 29   LCALL check_a_flag_idle
   061D  80 0A      SJMP L0629
 
 L061F:                  ; from 0610
@@ -1062,7 +1091,7 @@ L063E:                  ; from 0636
 L0641:                  ; from 063C
   0641  75 3D 0E   MOV 3Dh,#0Eh
   0644  31 29      ACALL run_move
-  0646  12 0E 29   LCALL L0E29
+  0646  12 0E 29   LCALL check_a_flag_idle
   0649  74 10      MOV A,#10h
   064B  75 F0 E7   MOV B,#E7h
   064E  12 0E D7   LCALL wait_polling_inputs ; wait, polling the shift register inputs
@@ -1080,7 +1109,7 @@ L065D:                  ; from 0655
 L0660:                  ; from 065B
   0660  75 3D 10   MOV 3Dh,#10h
   0663  31 29      ACALL run_move
-  0665  12 0E 29   LCALL L0E29
+  0665  12 0E 29   LCALL check_a_flag_idle
   0668  EC         MOV A,R4
   0669  30 E4 05   JNB ACC.4,L0671
   066C  30 E5 02   JNB ACC.5,L0671
@@ -1273,19 +1302,19 @@ L076D:                  ; from 0769
 
 ;   Calls: clear_ram, serial_init
 check_p25_input:        ; from 0285 08E1
-  076E  20 A5 23   JB P2.5,L0794
-  0771  20 1B 20   JB 23h.3,L0794
-  0774  20 A5 1D   JB P2.5,L0794
+  076E  20 A5 23   JB D_STOP_IN,L0794
+  0771  20 1B 20   JB D_FAULT,L0794
+  0774  20 A5 1D   JB D_STOP_IN,L0794
   0777  30 03 0C   JNB 20h.3,L0786
   077A  D2 D5      SETB F0
-  077C  D2 42      SETB 28h.2
+  077C  D2 42      SETB D_STATE
   077E  12 0F 15   LCALL clear_ram           ; clear iRAM 08h-42h, keep some flags
   0781  D2 01      SETB 20h.1
   0783  12 08 7C   LCALL serial_init         ; UART: mode 3, 9600 baud at 11.0592 MHz
 
 L0786:                  ; from 0777
-  0786  D2 1B      SETB 23h.3
-  0788  20 4E 09   JB 29h.6,L0794
+  0786  D2 1B      SETB D_FAULT
+  0788  20 4E 09   JB ST_PARKED,L0794
   078B  30 08 06   JNB 21h.0,L0794
   078E  D2 49      SETB 29h.1
   0790  D2 11      SETB 22h.1
@@ -1344,7 +1373,7 @@ start:                  ; from 0000 0577 0C40
   0815  D2 01      SETB 20h.1
   0817  E5 3B      MOV A,OPTION_P23
   0819  B4 A5 02   CJNE A,#A5h,L081E         ; P2.3 option present?
-  081C  D2 5A      SETB 2Bh.2
+  081C  D2 5A      SETB A_CAM_STATE
 
 L081E:                  ; from 0819
   081E  74 04      MOV A,#04h
@@ -1392,20 +1421,20 @@ L085A:                  ; from 0820 082A
   085F  01 BF      AJMP main_loop
 
 ;   Calls: outputs_off, motion_init
-L0861:                  ; from 0C3C 0C85 0F3E
+rehome_all:             ; from 0C3C 0C85 0F3E
   0861  D2 B6      SETB WR
   0863  12 00 26   LCALL outputs_off         ; all outputs to idle
 
 L0866:                  ; from 0866 0869
-  0866  30 B4 FD   JNB T0,L0866
-  0869  30 B4 FA   JNB T0,L0866
+  0866  30 B4 FD   JNB INTERLOCK,L0866
+  0869  30 B4 FA   JNB INTERLOCK,L0866
   086C  12 00 64   LCALL motion_init
   086F  75 35 01   MOV B_POSITION,#01h
   0872  E4         CLR A
   0873  F5 36      MOV C_POS_HI,A
   0875  F5 37      MOV C_POS_LO,A
-  0877  F5 38      MOV 38h,A
-  0879  F5 39      MOV 39h,A
+  0877  F5 38      MOV C_SAVED_HI,A
+  0879  F5 39      MOV C_SAVED_LO,A
   087B  22         RET
 
 ; UART setup: Timer 1 auto-reload with TH1 = FDh (9600 baud at 11.0592 MHz),
@@ -1426,16 +1455,16 @@ L0895:                  ; from 0890
   0895  22         RET
 
 ;   Calls: run_move
-L0896:                  ; from 0BE6 0C16
+a_pulse_and_advance:    ; from 0BE6 0C16
   0896  20 64 15   JB 2Ch.4,L08AE
   0899  D2 47      SETB 28h.7
   089B  D2 5D      SETB 2Bh.5
   089D  75 3C 00   MOV 3Ch,#00h
   08A0  75 3D 58   MOV 3Dh,#58h
   08A3  C2 57      CLR A_DIR
-  08A5  D2 A4      SETB P2.4
-  08A7  F1 F2      ACALL L0FF2
-  08A9  C2 A4      CLR P2.4
+  08A5  D2 A4      SETB PULSE_OUT
+  08A7  F1 F2      ACALL short_delay
+  08A9  C2 A4      CLR PULSE_OUT
   08AB  12 01 29   LCALL run_move            ; run a move, waiting for it to finish
 
 L08AE:                  ; from 0896
@@ -1463,20 +1492,20 @@ main_loop:              ; from 085F 0967
 
 L08C5:                  ; from 08BF
   08C5  30 67 02   JNB 2Ch.7,L08CA
-  08C8  71 6F      ACALL L0B6F
+  08C8  71 6F      ACALL key_handler
 
 L08CA:                  ; from 08C5
   08CA  31 8A      ACALL read_shift_register
   08CC  40 04      JC L08D2
-  08CE  D1 29      ACALL L0E29
+  08CE  D1 29      ACALL check_a_flag_idle
   08D0  80 02      SJMP L08D4
 
 L08D2:                  ; from 08CC
-  08D2  C2 18      CLR 23h.0
+  08D2  C2 18      CLR A_UNKNOWN
 
 L08D4:                  ; from 08D0
   08D4  60 04      JZ L08DA
-  08D6  71 6F      ACALL L0B6F
+  08D6  71 6F      ACALL key_handler
   08D8  80 04      SJMP L08DE
 
 L08DA:                  ; from 08D4
@@ -1484,7 +1513,7 @@ L08DA:                  ; from 08D4
   08DC  C2 47      CLR 28h.7
 
 L08DE:                  ; from 08D8
-  08DE  20 A5 03   JB P2.5,L08E4
+  08DE  20 A5 03   JB D_STOP_IN,L08E4
   08E1  12 07 6E   LCALL check_p25_input
 
 L08E4:                  ; from 08DE
@@ -1570,9 +1599,9 @@ L0954:                  ; from 094F
   095C  D2 A8      SETB EX0
 
 L095E:                  ; from 0956 0959
-  095E  A2 1B      MOV C,23h.3               ; status out on P3.7
+  095E  A2 1B      MOV C,D_FAULT             ; status out on P3.7
   0960  92 B7      MOV RD,C
-  0962  A2 16      MOV C,22h.6
+  0962  A2 16      MOV C,PARKED
   0964  B3         CPL C
   0965  92 B6      MOV WR,C                  ; inverted status out on P3.6
   0967  01 BF      AJMP main_loop
@@ -1622,22 +1651,23 @@ L0994:                  ; from 099B
   09A5  F4         CPL A
   09A6  22         RET
 
-;   Calls: L01E8, L01F4
+;   Calls: d_to_state0_overdrive, d_to_state1
 L09A7:                  ; from 0C0C
-  09A7  30 16 10   JNB 22h.6,L09BA
+  09A7  30 16 10   JNB PARKED,L09BA
   09AA  20 3F 0D   JB 27h.7,L09BA
-  09AD  30 A5 0A   JNB P2.5,L09BA
-  09B0  C2 1B      CLR 23h.3
+  09AD  30 A5 0A   JNB D_STOP_IN,L09BA
+  09B0  C2 1B      CLR D_FAULT
   09B2  D2 47      SETB 28h.7
-  09B4  12 01 E8   LCALL L01E8
-  09B7  12 01 F4   LCALL L01F4
+  09B4  12 01 E8   LCALL d_to_state0_overdrive ; motor D 96 steps towards state 0
+  09B7  12 01 F4   LCALL d_to_state1         ; motor D 74 steps towards state 1
 
 L09BA:                  ; from 09A7 09AA 09AD
   09BA  22         RET
 
-; C1h xx: 40 = enter read mode; 20, 10, 08, 04 = mechanism actions (01F4h,
-; b_to_position_1, 0E9Dh, 0E46h), refused while busy or in read mode.
-;   Calls: L01F4
+; C1h xx: 40 = enter read mode; 20 = motor D to state 1; 10 = park;
+; 08, 04 = motor A actions (a_action_08, a_action_04). Refused while parked,
+; in read mode or after a motor A fault.
+;   Calls: d_to_state1
 cmd_C1:                 ; from 0D93
   09BB  EE         MOV A,R6
   09BC  54 7C      ANL A,#7Ch
@@ -1652,28 +1682,28 @@ L09C8:                  ; from 09C3
 
 L09CC:                  ; from 09C0
   09CC  20 05 2A   JB 20h.5,L09F9
-  09CF  20 16 27   JB 22h.6,L09F9
-  09D2  20 19 24   JB 23h.1,L09F9
+  09CF  20 16 27   JB PARKED,L09F9
+  09D2  20 19 24   JB A_FAULT,L09F9
   09D5  B4 20 08   CJNE A,#20h,L09E0
-  09D8  20 42 03   JB 28h.2,L09DE
-  09DB  12 01 F4   LCALL L01F4
+  09D8  20 42 03   JB D_STATE,L09DE
+  09DB  12 01 F4   LCALL d_to_state1         ; motor D 74 steps towards state 1
 
 L09DE:                  ; from 09D8
   09DE  80 17      SJMP L09F7
 
 L09E0:                  ; from 09D5
   09E0  B4 10 04   CJNE A,#10h,L09E7
-  09E3  51 E7      ACALL b_to_position_1
+  09E3  51 E7      ACALL park
   09E5  80 10      SJMP L09F7
 
 L09E7:                  ; from 09E0
   09E7  B4 08 04   CJNE A,#08h,L09EE
-  09EA  D1 9D      ACALL L0E9D
+  09EA  D1 9D      ACALL a_action_08
   09EC  80 09      SJMP L09F7
 
 L09EE:                  ; from 09E7
   09EE  B4 04 04   CJNE A,#04h,L09F5
-  09F1  D1 46      ACALL L0E46
+  09F1  D1 46      ACALL a_action_04
   09F3  80 02      SJMP L09F7
 
 L09F5:                  ; from 09EE
@@ -1688,12 +1718,13 @@ L09F9:                  ; from 09CC 09CF 09D2
 L09FB:                  ; from 09BE 09CA 09F7
   09FB  22         RET
 
-; C0h xx: 00 = no action; 80 or C0 = enter echo mode; 01 = re-initialise and
-; accept all frames; 02 = leave read mode.
+; C0h xx: 00 = nothing else; 80 or C0 = enter echo mode; 01 = re-initialise
+; and accept all frames; 02 = leave read mode. Bits 2 and 6 are masked off
+; here and applied by c0_park_bits.
 cmd_C0:                 ; from 0D8A
   09FC  EE         MOV A,R6
   09FD  54 BB      ANL A,#BBh
-  09FF  60 37      JZ L0A38
+  09FF  60 37      JZ c0_park_bits
   0A01  B4 80 13   CJNE A,#80h,L0A17
   0A04  20 05 0C   JB 20h.5,L0A13
   0A07  CE         XCH A,R6
@@ -1710,44 +1741,47 @@ L0A13:                  ; from 0A04 0A0C
   0A13  D2 45      SETB CMD_ERROR
 
 L0A15:                  ; from 0A11
-  0A15  80 21      SJMP L0A38
+  0A15  80 21      SJMP c0_park_bits
 
 L0A17:                  ; from 0A01
   0A17  B4 01 15   CJNE A,#01h,L0A2F
   0A1A  C0 06      PUSH 06h
-  0A1C  A2 16      MOV C,22h.6
+  0A1C  A2 16      MOV C,PARKED
   0A1E  C0 D0      PUSH PSW
   0A20  D2 D5      SETB F0
   0A22  F1 15      ACALL clear_ram
   0A24  D0 D0      POP PSW
   0A26  B3         CPL C
-  0A27  92 4E      MOV 29h.6,C
+  0A27  92 4E      MOV ST_PARKED,C
   0A29  D0 06      POP 06h
   0A2B  D2 08      SETB 21h.0
-  0A2D  80 09      SJMP L0A38
+  0A2D  80 09      SJMP c0_park_bits
 
 L0A2F:                  ; from 0A17
   0A2F  B4 02 04   CJNE A,#02h,L0A36
   0A32  C2 05      CLR 20h.5
-  0A34  80 02      SJMP L0A38
+  0A34  80 02      SJMP c0_park_bits
 
 L0A36:                  ; from 0A2F
   0A36  D2 45      SETB CMD_ERROR
 
-L0A38:                  ; from 09FF 0A15 0A2D 0A34
+; For every accepted C0h command: second byte bit 6 = parity sense, bit 2 set
+; = unpark (clear PARKED, motor C back to its saved position), bit 2 clear =
+; park if not parked.
+c0_park_bits:           ; from 09FF 0A15 0A2D 0A34
   0A38  20 45 15   JB CMD_ERROR,L0A50
   0A3B  EE         MOV A,R6
   0A3C  A2 E6      MOV C,ACC.6
   0A3E  92 0A      MOV PARITY_ODD,C
   0A40  30 E2 08   JNB ACC.2,L0A4B
-  0A43  C2 4E      CLR 29h.6
-  0A45  C2 16      CLR 22h.6
-  0A47  F1 E0      ACALL L0FE0
+  0A43  C2 4E      CLR ST_PARKED
+  0A45  C2 16      CLR PARKED
+  0A47  F1 E0      ACALL c_to_saved
   0A49  80 05      SJMP L0A50
 
 L0A4B:                  ; from 0A40
-  0A4B  20 16 02   JB 22h.6,L0A50
-  0A4E  51 E7      ACALL b_to_position_1
+  0A4B  20 16 02   JB PARKED,L0A50
+  0A4E  51 E7      ACALL park
 
 L0A50:                  ; from 0A38 0A49 0A4B
   0A50  7E 00      MOV R6,#00h
@@ -1848,8 +1882,8 @@ L0AE4:                  ; from 0ADC
 L0AE6:                  ; from 0A59 0A91 0AA0 0AAF 0ABF 0ACF +2
   0AE6  22         RET
 
-;   Calls: L00AE, L01F4
-b_to_position_1:        ; from 09E3 0A4E 0E7D 0EC5
+;   Calls: L00AE, d_to_state1
+park:                   ; from 09E3 0A4E 0E7D 0EC5
   0AE7  E4         CLR A
   0AE8  F5 16      MOV 16h,A
   0AEA  F5 17      MOV 17h,A
@@ -1858,13 +1892,13 @@ b_to_position_1:        ; from 09E3 0A4E 0E7D 0EC5
   0AF0  F1 77      ACALL set_b_target
   0AF2  75 35 01   MOV B_POSITION,#01h
   0AF5  12 00 AE   LCALL L00AE
-  0AF8  F1 E9      ACALL L0FE9
-  0AFA  20 42 03   JB 28h.2,L0B00
-  0AFD  12 01 F4   LCALL L01F4
+  0AF8  F1 E9      ACALL c_to_park
+  0AFA  20 42 03   JB D_STATE,L0B00
+  0AFD  12 01 F4   LCALL d_to_state1         ; motor D 74 steps towards state 1
 
 L0B00:                  ; from 0AFA
-  0B00  D2 4E      SETB 29h.6
-  0B02  D2 16      SETB 22h.6
+  0B00  D2 4E      SETB ST_PARKED
+  0B02  D2 16      SETB PARKED
   0B04  22         RET
 
 ; Motion commands (first byte 00h-BFh):
@@ -1906,7 +1940,7 @@ L0B27:                  ; from 0B1D
   0B2E  F5 3C      MOV 3Ch,A
   0B30  8E 3D      MOV 3Dh,R6
   0B32  12 01 29   LCALL run_move            ; run a move, waiting for it to finish
-  0B35  D1 29      ACALL L0E29
+  0B35  D1 29      ACALL check_a_flag_idle
   0B37  80 35      SJMP L0B6E
 
 L0B39:                  ; from 0B20
@@ -1947,8 +1981,14 @@ L0B6C:                  ; from 0B25
 L0B6E:                  ; from 0B18 0B37 0B4F 0B6A
   0B6E  22         RET
 
-;   Calls: L0601, L01E8, L01F4, run_move
-L0B6F:                  ; from 08C8 08D6
+; Front-panel key handler (keys = shift register bits 1-6, active-low).
+; While parked: keys 5/6 jog motor A, keys 3+4 start the automatic sequence,
+; key 3 cycles motor D, key 2 pulses P2.4 and advances motor A. With no host,
+; key 1 moves motor A 1056 steps. With a host connected, presses are reported
+; in status bit 29h.2 and byte 24h. While the automatic sequence runs, key 4
+; stops it (re-home and restart) and key 2 switches sequence.
+;   Calls: jog_a, d_to_state0_overdrive, d_to_state1, run_move
+key_handler:            ; from 08C8 08D6
   0B6F  30 67 09   JNB 2Ch.7,L0B7B
   0B72  C2 67      CLR 2Ch.7
   0B74  75 3F 05   MOV 3Fh,#05h
@@ -1978,17 +2018,17 @@ L0B95:                  ; from 0B90
   0B95  C3         CLR C
   0B96  72 E5      ORL C,ACC.5
   0B98  72 E6      ORL C,ACC.6
-  0B9A  82 16      ANL C,22h.6
+  0B9A  82 16      ANL C,PARKED
   0B9C  50 05      JNC L0BA3
-  0B9E  12 06 01   LCALL L0601
+  0B9E  12 06 01   LCALL jog_a               ; jog motor A while key 5 or 6 is held
   0BA1  81 2F      AJMP L0C2F
 
 L0BA3:                  ; from 0B9C
   0BA3  72 E4      ORL C,ACC.4
   0BA5  82 E3      ANL C,ACC.3
-  0BA7  82 16      ANL C,22h.6
+  0BA7  82 16      ANL C,PARKED
   0BA9  50 06      JNC L0BB1
-  0BAB  91 4C      ACALL L0C4C
+  0BAB  91 4C      ACALL start_auto_sequence
   0BAD  D2 47      SETB 28h.7
   0BAF  80 7E      SJMP L0C2F
 
@@ -1996,11 +2036,11 @@ L0BB1:                  ; from 0BA9
   0BB1  30 08 53   JNB 21h.0,L0C07
   0BB4  20 44 3E   JB 28h.4,L0BF5
   0BB7  30 E3 14   JNB ACC.3,L0BCE
-  0BBA  30 16 0B   JNB 22h.6,L0BC8
-  0BBD  30 A5 08   JNB P2.5,L0BC8
-  0BC0  C2 1B      CLR 23h.3
-  0BC2  12 01 E8   LCALL L01E8
-  0BC5  12 01 F4   LCALL L01F4
+  0BBA  30 16 0B   JNB PARKED,L0BC8
+  0BBD  30 A5 08   JNB D_STOP_IN,L0BC8
+  0BC0  C2 1B      CLR D_FAULT
+  0BC2  12 01 E8   LCALL d_to_state0_overdrive ; motor D 96 steps towards state 0
+  0BC5  12 01 F4   LCALL d_to_state1         ; motor D 74 steps towards state 1
 
 L0BC8:                  ; from 0BBA 0BBD
   0BC8  C2 5D      CLR 2Bh.5
@@ -2019,11 +2059,11 @@ L0BD5:                  ; from 0BCE
   0BDC  D2 26      SETB 24h.6
 
 L0BDE:                  ; from 0BD5
-  0BDE  A2 16      MOV C,22h.6
+  0BDE  A2 16      MOV C,PARKED
   0BE0  82 E2      ANL C,ACC.2
   0BE2  50 08      JNC L0BEC
   0BE4  D2 5D      SETB 2Bh.5
-  0BE6  11 96      ACALL L0896
+  0BE6  11 96      ACALL a_pulse_and_advance
   0BE8  D2 44      SETB 28h.4
   0BEA  D2 24      SETB 24h.4
 
@@ -2053,8 +2093,8 @@ L0C07:                  ; from 0BB1
 
 L0C10:                  ; from 0C07
   0C10  30 E2 07   JNB ACC.2,L0C1A
-  0C13  30 16 04   JNB 22h.6,L0C1A
-  0C16  11 96      ACALL L0896
+  0C13  30 16 04   JNB PARKED,L0C1A
+  0C16  11 96      ACALL a_pulse_and_advance
   0C18  80 15      SJMP L0C2F
 
 L0C1A:                  ; from 0C10 0C13
@@ -2075,8 +2115,8 @@ L0C31:                  ; from 0B93
   0C34  E5 3B      MOV A,OPTION_P23
   0C36  B4 A5 07   CJNE A,#A5h,L0C40
   0C39  20 5D 04   JB 2Bh.5,L0C40
-  0C3C  11 61      ACALL L0861
-  0C3E  D1 9D      ACALL L0E9D
+  0C3C  11 61      ACALL rehome_all
+  0C3E  D1 9D      ACALL a_action_08
 
 L0C40:                  ; from 0C36 0C39
   0C40  01 0A      AJMP start
@@ -2087,14 +2127,14 @@ L0C40:                  ; from 0C36 0C39
 L0C44:                  ; from 0C31
   0C44  30 E2 04   JNB ACC.2,L0C4B
   0C47  D2 47      SETB 28h.7
-  0C49  91 4C      ACALL L0C4C
+  0C49  91 4C      ACALL start_auto_sequence
 
 L0C4B:                  ; from 0B8E 0C2F 0C44
   0C4B  22         RET
 
-;   Calls: run_move, L01EE, L00AE
-L0C4C:                  ; from 0BAB 0C49
-  0C4C  20 1B 6F   JB 23h.3,L0CBE
+;   Calls: run_move, d_to_state0, L00AE
+start_auto_sequence:    ; from 0BAB 0C49
+  0C4C  20 1B 6F   JB D_FAULT,L0CBE
 
 L0C4F:                  ; from 0C4F
   0C4F  20 64 FD   JB 2Ch.4,L0C4F
@@ -2114,21 +2154,21 @@ L0C63:                  ; from 0C5F
 L0C65:                  ; from 0C57
   0C65  75 20 08   MOV 20h,#08h
   0C68  C2 08      CLR 21h.0
-  0C6A  C2 16      CLR 22h.6
+  0C6A  C2 16      CLR PARKED
   0C6C  D2 B6      SETB WR
-  0C6E  F1 F2      ACALL L0FF2
+  0C6E  F1 F2      ACALL short_delay
   0C70  75 3A 00   MOV TX_BYTE,#00h
   0C73  11 AF      ACALL serial_send
-  0C75  F1 F2      ACALL L0FF2
+  0C75  F1 F2      ACALL short_delay
   0C77  E5 3B      MOV A,OPTION_P23
   0C79  B4 A5 09   CJNE A,#A5h,L0C85
   0C7C  20 5D 06   JB 2Bh.5,L0C85
   0C7F  31 8A      ACALL read_shift_register
   0C81  40 02      JC L0C85
-  0C83  D1 46      ACALL L0E46
+  0C83  D1 46      ACALL a_action_04
 
 L0C85:                  ; from 0C63 0C79 0C7C 0C81
-  0C85  11 61      ACALL L0861
+  0C85  11 61      ACALL rehome_all
   0C87  E4         CLR A
   0C88  75 2A 21   MOV 2Ah,#21h
   0C8B  F5 16      MOV 16h,A
@@ -2147,8 +2187,8 @@ L0C85:                  ; from 0C63 0C79 0C7C 0C81
   0CAE  C2 5C      CLR 2Bh.4
 
 L0CB0:                  ; from 0CA0
-  0CB0  30 42 03   JNB 28h.2,L0CB6
-  0CB3  12 01 EE   LCALL L01EE
+  0CB0  30 42 03   JNB D_STATE,L0CB6
+  0CB3  12 01 EE   LCALL d_to_state0         ; motor D 74 steps towards state 0
 
 L0CB6:                  ; from 0CB0
   0CB6  12 00 AE   LCALL L00AE
@@ -2281,11 +2321,11 @@ L0D65:                  ; from 0D5E
   0D6C  80 19      SJMP L0D87
 
 L0D6E:                  ; from 0D66 0D69
-  0D6E  20 16 10   JB 22h.6,L0D81
+  0D6E  20 16 10   JB PARKED,L0D81
   0D71  20 05 0D   JB 20h.5,L0D81
-  0D74  20 19 0A   JB 23h.1,L0D81
-  0D77  30 42 03   JNB 28h.2,L0D7D
-  0D7A  12 01 EE   LCALL L01EE
+  0D74  20 19 0A   JB A_FAULT,L0D81
+  0D77  30 42 03   JNB D_STATE,L0D7D
+  0D7A  12 01 EE   LCALL d_to_state0         ; motor D 74 steps towards state 0
 
 L0D7D:                  ; from 0D77
   0D7D  71 05      ACALL motion_command
@@ -2402,9 +2442,9 @@ L0E1A:                  ; from 0E12 0E15
 
 L0E1C:                  ; from 0E18
   0E1C  8C 36      MOV C_POS_HI,R4
-  0E1E  8C 38      MOV 38h,R4
+  0E1E  8C 38      MOV C_SAVED_HI,R4
   0E20  8B 37      MOV C_POS_LO,R3
-  0E22  8B 39      MOV 39h,R3
+  0E22  8B 39      MOV C_SAVED_LO,R3
   0E24  80 02      SJMP L0E28
 
 L0E26:                  ; from 0E10 0E1A
@@ -2413,16 +2453,18 @@ L0E26:                  ; from 0E10 0E1A
 L0E28:                  ; from 0E24
   0E28  22         RET
 
-L0E29:                  ; from 061A 0646 0665 08CE 0B35
+; With the motor A option fitted, report motor A's flag reading low twice
+; (A_UNKNOWN and status error bits).
+check_a_flag_idle:      ; from 061A 0646 0665 08CE 0B35
   0E29  C0 E0      PUSH ACC
   0E2B  E5 3B      MOV A,OPTION_P23
   0E2D  B4 A5 13   CJNE A,#A5h,L0E43
-  0E30  20 18 10   JB 23h.0,L0E43
+  0E30  20 18 10   JB A_UNKNOWN,L0E43
   0E33  31 8A      ACALL read_shift_register
   0E35  40 0C      JC L0E43
   0E37  31 8A      ACALL read_shift_register
   0E39  40 08      JC L0E43
-  0E3B  D2 18      SETB 23h.0
+  0E3B  D2 18      SETB A_UNKNOWN
   0E3D  D2 49      SETB 29h.1
   0E3F  D2 11      SETB 22h.1
   0E41  D2 43      SETB 28h.3
@@ -2431,36 +2473,40 @@ L0E43:                  ; from 0E2D 0E30 0E35 0E39
   0E43  D0 E0      POP ACC
   0E45  22         RET
 
+; C1h 04h: motor A forward until its flag goes high (at most 240h steps),
+; 16 + 116 more, pulse P2.4, 88 more; sets A_CAM_STATE. Runs a_action_08 first
+; if A_CAM_STATE is set. No edge: A_FAULT, status error, park. Motor C goes
+; to 960 first and back afterwards. Refused without the P2.3 option.
 ;   Calls: run_move
-L0E46:                  ; from 09F1 0C83
+a_action_04:            ; from 09F1 0C83
   0E46  E5 3B      MOV A,OPTION_P23
   0E48  B4 A0 04   CJNE A,#A0h,L0E4F
   0E4B  D2 45      SETB CMD_ERROR
   0E4D  80 4D      SJMP L0E9C
 
 L0E4F:                  ; from 0E48
-  0E4F  30 5A 02   JNB 2Bh.2,L0E54
-  0E52  D1 9D      ACALL L0E9D
+  0E4F  30 5A 02   JNB A_CAM_STATE,L0E54
+  0E52  D1 9D      ACALL a_action_08
 
 L0E54:                  ; from 0E4F
-  0E54  20 19 45   JB 23h.1,L0E9C
-  0E57  F1 E9      ACALL L0FE9
+  0E54  20 19 45   JB A_FAULT,L0E9C
+  0E57  F1 E9      ACALL c_to_park
   0E59  D2 A3      SETB P2.3
-  0E5B  F1 F2      ACALL L0FF2
+  0E5B  F1 F2      ACALL short_delay
   0E5D  C2 A3      CLR P2.3
-  0E5F  D2 59      SETB 2Bh.1
+  0E5F  D2 59      SETB A_STOP_ON_HIGH
   0E61  C2 57      CLR A_DIR
   0E63  75 3C 02   MOV 3Ch,#02h
   0E66  75 3D 40   MOV 3Dh,#40h
   0E69  12 01 29   LCALL run_move            ; run a move, waiting for it to finish
-  0E6C  30 59 12   JNB 2Bh.1,L0E81
-  0E6F  C2 59      CLR 2Bh.1
+  0E6C  30 59 12   JNB A_STOP_ON_HIGH,L0E81
+  0E6F  C2 59      CLR A_STOP_ON_HIGH
   0E71  D2 49      SETB 29h.1
   0E73  D2 11      SETB 22h.1
-  0E75  D2 19      SETB 23h.1
+  0E75  D2 19      SETB A_FAULT
   0E77  75 26 91   MOV 26h,#91h
   0E7A  20 03 02   JB 20h.3,L0E7F
-  0E7D  51 E7      ACALL b_to_position_1
+  0E7D  51 E7      ACALL park
 
 L0E7F:                  ; from 0E7A
   0E7F  80 1B      SJMP L0E9C
@@ -2470,20 +2516,23 @@ L0E81:                  ; from 0E6C
   0E82  F5 3C      MOV 3Ch,A
   0E84  75 3D 74   MOV 3Dh,#74h
   0E87  12 01 29   LCALL run_move            ; run a move, waiting for it to finish
-  0E8A  D2 A4      SETB P2.4
-  0E8C  F1 F2      ACALL L0FF2
-  0E8E  C2 A4      CLR P2.4
+  0E8A  D2 A4      SETB PULSE_OUT
+  0E8C  F1 F2      ACALL short_delay
+  0E8E  C2 A4      CLR PULSE_OUT
   0E90  75 3D 58   MOV 3Dh,#58h
   0E93  12 01 29   LCALL run_move            ; run a move, waiting for it to finish
-  0E96  D2 5A      SETB 2Bh.2
-  0E98  C2 18      CLR 23h.0
-  0E9A  F1 E0      ACALL L0FE0
+  0E96  D2 5A      SETB A_CAM_STATE
+  0E98  C2 18      CLR A_UNKNOWN
+  0E9A  F1 E0      ACALL c_to_saved
 
 L0E9C:                  ; from 0E4D 0E54 0E7F
   0E9C  22         RET
 
+; C1h 08h: motor A forward (same direction as 04h) until its flag goes low
+; (at most 526h steps), then 16 + 900 more; clears A_CAM_STATE. No edge:
+; A_FAULT, status error, park. Refused without the P2.3 option.
 ;   Calls: run_move
-L0E9D:                  ; from 09EA 0C3E 0E52
+a_action_08:            ; from 09EA 0C3E 0E52
   0E9D  E5 3B      MOV A,OPTION_P23
   0E9F  B4 A0 04   CJNE A,#A0h,L0EA6
   0EA2  D2 45      SETB CMD_ERROR
@@ -2491,27 +2540,27 @@ L0E9D:                  ; from 09EA 0C3E 0E52
 
 L0EA6:                  ; from 0E9F
   0EA6  C2 5D      CLR 2Bh.5
-  0EA8  F1 E9      ACALL L0FE9
-  0EAA  D2 58      SETB 2Bh.0
+  0EA8  F1 E9      ACALL c_to_park
+  0EAA  D2 58      SETB A_STOP_ON_LOW
   0EAC  C2 57      CLR A_DIR
   0EAE  75 3C 05   MOV 3Ch,#05h
   0EB1  75 3D 26   MOV 3Dh,#26h
   0EB4  12 01 29   LCALL run_move            ; run a move, waiting for it to finish
-  0EB7  30 58 0F   JNB 2Bh.0,L0EC9
-  0EBA  C2 58      CLR 2Bh.0
+  0EB7  30 58 0F   JNB A_STOP_ON_LOW,L0EC9
+  0EBA  C2 58      CLR A_STOP_ON_LOW
   0EBC  D2 49      SETB 29h.1
   0EBE  D2 11      SETB 22h.1
-  0EC0  D2 19      SETB 23h.1
+  0EC0  D2 19      SETB A_FAULT
   0EC2  75 26 B1   MOV 26h,#B1h
-  0EC5  51 E7      ACALL b_to_position_1
+  0EC5  51 E7      ACALL park
   0EC7  80 0D      SJMP L0ED6
 
 L0EC9:                  ; from 0EB7
   0EC9  75 3C 03   MOV 3Ch,#03h
   0ECC  75 3D 84   MOV 3Dh,#84h
   0ECF  12 01 29   LCALL run_move            ; run a move, waiting for it to finish
-  0ED2  C2 5A      CLR 2Bh.2
-  0ED4  F1 E0      ACALL L0FE0
+  0ED2  C2 5A      CLR A_CAM_STATE
+  0ED4  F1 E0      ACALL c_to_saved
 
 L0ED6:                  ; from 0EA4 0EC7
   0ED6  22         RET
@@ -2564,11 +2613,11 @@ L0F14:                  ; from 0EFF
 
 ; Clear iRAM 08h-42h, keeping flags 2Bh.2 and 28h.2. Then test P2.3: if it
 ; reads high, OPTION_P23 = A5h, otherwise A0h (an option or presence input).
-;   Calls: L01E8, L01F4
+;   Calls: d_to_state0_overdrive, d_to_state1
 clear_ram:              ; from 077E 0812 0A22
-  0F15  A2 5A      MOV C,2Bh.2
+  0F15  A2 5A      MOV C,A_CAM_STATE
   0F17  92 D6      MOV AC,C
-  0F19  A2 42      MOV C,28h.2
+  0F19  A2 42      MOV C,D_STATE
   0F1B  C0 D0      PUSH PSW
   0F1D  78 42      MOV R0,#42h
   0F1F  E4         CLR A
@@ -2578,9 +2627,9 @@ L0F20:                  ; from 0F22
   0F21  18         DEC R0
   0F22  B8 07 FB   CJNE R0,#07h,L0F20
   0F25  D0 D0      POP PSW
-  0F27  92 42      MOV 28h.2,C
+  0F27  92 42      MOV D_STATE,C
   0F29  A2 D6      MOV C,AC
-  0F2B  92 5A      MOV 2Bh.2,C
+  0F2B  92 5A      MOV A_CAM_STATE,C
   0F2D  D2 A3      SETB P2.3
   0F2F  20 A3 05   JB P2.3,L0F37
   0F32  75 3B A0   MOV OPTION_P23,#A0h
@@ -2590,9 +2639,9 @@ L0F37:                  ; from 0F2F
   0F37  75 3B A5   MOV OPTION_P23,#A5h
 
 L0F3A:                  ; from 0F35
-  0F3A  C2 A4      CLR P2.4
+  0F3A  C2 A4      CLR PULSE_OUT
   0F3C  C2 A3      CLR P2.3
-  0F3E  11 61      ACALL L0861
+  0F3E  11 61      ACALL rehome_all
   0F40  74 80      MOV A,#80h
   0F42  F5 22      MOV 22h,A
   0F44  F5 23      MOV 23h,A
@@ -2604,25 +2653,25 @@ L0F3A:                  ; from 0F35
   0F50  F5 32      MOV 32h,A
   0F52  F5 33      MOV 33h,A
   0F54  F5 34      MOV 34h,A
-  0F56  D2 16      SETB 22h.6
+  0F56  D2 16      SETB PARKED
   0F58  D2 15      SETB 22h.5
-  0F5A  D2 4E      SETB 29h.6
+  0F5A  D2 4E      SETB ST_PARKED
   0F5C  D2 4D      SETB 29h.5
   0F5E  20 D5 06   JB F0,L0F67
-  0F61  12 01 E8   LCALL L01E8
-  0F64  12 01 F4   LCALL L01F4
+  0F61  12 01 E8   LCALL d_to_state0_overdrive ; motor D 96 steps towards state 0
+  0F64  12 01 F4   LCALL d_to_state1         ; motor D 74 steps towards state 1
 
 L0F67:                  ; from 0F5E
-  0F67  20 42 03   JB 28h.2,L0F6D
-  0F6A  12 01 F4   LCALL L01F4
+  0F67  20 42 03   JB D_STATE,L0F6D
+  0F6A  12 01 F4   LCALL d_to_state1         ; motor D 74 steps towards state 1
 
 L0F6D:                  ; from 0F67
   0F6D  E5 3B      MOV A,OPTION_P23
   0F6F  B4 A5 02   CJNE A,#A5h,L0F74
-  0F72  D2 18      SETB 23h.0
+  0F72  D2 18      SETB A_UNKNOWN
 
 L0F74:                  ; from 0F6F
-  0F74  F1 E9      ACALL L0FE9
+  0F74  F1 E9      ACALL c_to_park
   0F76  22         RET
 
 ; Motor B, 96-position circular axis. Target must be 01h-60h. Distance from
@@ -2708,19 +2757,19 @@ L0FD7:                  ; from 0701 072E 0CB9 0D38 0D5B
   0FDD  D1 FF      ACALL L0EFF
   0FDF  22         RET
 
-L0FE0:                  ; from 0A47 0E9A 0ED4
-  0FE0  85 38 3C   MOV 3Ch,38h
-  0FE3  85 39 3D   MOV 3Dh,39h
+c_to_saved:             ; from 0A47 0E9A 0ED4
+  0FE0  85 38 3C   MOV 3Ch,C_SAVED_HI
+  0FE3  85 39 3D   MOV 3Dh,C_SAVED_LO
   0FE6  91 BF      ACALL move_to_target
   0FE8  22         RET
 
-L0FE9:                  ; from 0AF8 0E57 0EA8 0F74
+c_to_park:              ; from 0AF8 0E57 0EA8 0F74
   0FE9  75 3C 03   MOV 3Ch,#03h
   0FEC  75 3D C0   MOV 3Dh,#C0h
   0FEF  91 BF      ACALL move_to_target
   0FF1  22         RET
 
-L0FF2:                  ; from 08A7 0C6E 0C75 0E5B 0E8C
+short_delay:            ; from 08A7 0C6E 0C75 0E5B 0E8C
   0FF2  74 03      MOV A,#03h
   0FF4  75 F0 B5   MOV B,#B5h
   0FF7  D1 D7      ACALL wait_polling_inputs

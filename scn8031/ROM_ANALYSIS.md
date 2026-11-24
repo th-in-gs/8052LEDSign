@@ -98,29 +98,33 @@ cleanly (3,824 of 4,096 bytes reached as code, 74 called routines).
 | ASCII strings        | None                                                                                                                                         |
 | Unused               | 0x0FFA–0x0FFE (0xFF), 0x0FFF = 0x00                                                                                                          |
 
-## What it appears to do: a three-motor positioning controller on a serial bus
+## What it appears to do: a four-motor positioning controller on a serial bus
 
 ### Motors and phase outputs
 
-Three stepper motor outputs, each on four (or three) port pins. Each port
-is written through a copy kept in internal RAM, so the other half of the
-port is left unchanged. The outputs idle high, so coils appear to be driven
+Four stepper motor outputs, each on four (or three) port pins. Each port is
+written through a copy kept in internal RAM, so the other half of the port
+is left unchanged. The outputs idle high, so coils appear to be driven
 active-low: a 0 bit switches a coil on.
 
-| Motor | Output pins                | Phase variable | Next-pattern table | Driven from | Type              |
-| ----- | -------------------------- | -------------- | ------------------ | ----------- | ----------------- |
-| A     | P0.4–P0.7                  | internal 0x43  | 0x04CC             | Timer 0     | 4-wire, half-step |
-| B     | P0.0–P0.2 (P0.3 held high) | internal 0x41  | 0x039A             | Timer 0     | 3-phase, 6-step   |
-| C     | P1.0–P1.3                  | R1 (bank 2)    | 0x04CC             | Timer 1     | 4-wire, half-step |
+| Motor | Output pins                | Phase variable            | Next-pattern table | Driven from              | Type              |
+| ----- | -------------------------- | ------------------------- | ------------------ | ------------------------ | ----------------- |
+| A     | P0.4–P0.7                  | internal 0x43             | 0x04CC             | Timer 0                  | 4-wire, half-step |
+| B     | P0.0–P0.2 (P0.3 held high) | internal 0x41             | 0x039A             | Timer 0                  | 3-phase, 6-step   |
+| C     | P1.0–P1.3                  | internal 0x11 (bank 2 R1) | 0x04CC             | Timer 1                  | 4-wire, half-step |
+| D     | P1.4–P1.7                  | internal 0x0E (bank 1 R6) | 0x04CC             | Motion loop, fixed delay | 4-wire, half-step |
 
-The Timer 0 interrupt steps either motor A or motor B, whichever is moving,
-so at most two motors move at once.
+The Timer 0 interrupt steps either motor A or motor B, whichever is moving.
+Motor D is stepped by the motion loop itself (0x026C), with a fixed delay
+between steps, so it is slow and has no acceleration ramp. An earlier
+version of this analysis missed motor D: its output routine (0x0256) writes
+the high half of P1, next to motor C.
 
 **Next-pattern tables.** Each step looks up the current 4-bit pattern; the
 high 4 bits of the table entry are the next pattern in one direction, the
 low 4 bits in the other.
 
-- 0x04CC (motors A and C): starting from 0xE, one direction cycles
+- 0x04CC (motors A, C and D): starting from 0xE, one direction cycles
   E→6→7→5→D→9→B→A→E (hex digits). Inverted (active-low), that is 1, 9, 8, A,
   2, 6, 4, 5: a classic 8-state half-step sequence. Invalid patterns (F, C,
   8, 1 …) lead into the cycle within a couple of steps.
@@ -142,13 +146,128 @@ low 4 bits in the other.
   or carousel with 96 positions.
 - **Motor C: linear axis with tracked position.** A 16-bit position at
   internal 0x36:0x37, kept within 0x0000–0x0C60 (0–3168 half-steps) by
-  0x0DF5.
-- **Motor A: relative moves only.** Moves of up to 2047 half-steps with a
-  direction bit; no position is tracked.
+  0x0DF5. Before motor A's actions and when parking, it moves to position
+  0x03C0 (960), then returns to a saved position afterwards: probably
+  lifting something clear.
+- **Motor A: one-way rotary mechanism with a position flag.** The host can
+  move it by up to 2047 half-steps in either direction, and the front-panel
+  keys jog it. But both of its automatic actions (0xC1 0x04 and 0xC1 0x08)
+  turn it the same way and stop relative to the two edges of one sensor
+  signal. That pattern suits a cam, crank or rotary valve that always turns
+  forward.
+- **Motor D: two-position mechanism.** It moves between two states about
+  74 half-steps apart, recorded in flag 0x28.2. Every motion command first
+  puts it in state 0, and parking puts it in state 1. A lock, clamp or cover
+  would fit.
+
+### Homing and position feedback
+
+Open-loop steppers need a known starting point. Each motor gets one
+differently:
+
+| Motor | Feedback                                       | Homing                                                        | When                        |
+| ----- | ---------------------------------------------- | ------------------------------------------------------------- | --------------------------- |
+| C     | Switch on the INT1 pin (P3.3)                  | Two-phase: fast approach to the switch, slow back-off, offset | Every reset (0x0064)        |
+| A     | Shift-register input bit 0                     | Stop a fixed distance past a rising or falling edge           | First 0xC1 0x04/0x08 action |
+| D     | None for position. P2.5 stops it (fault/limit) | Overdrive against a hard stop, then back off                  | Every reset (0x0F61)        |
+| B     | None found                                     | 99 single steps while motor C is parked past its switch       | Every reset (0x0088)        |
+
+**Motor C** (`motion_init`, 0x0064):
+1. Back off 50 half-steps.
+2. Drive toward home for up to 3480 (0x0D98) half-steps: more than the 3168
+   travel, so it always reaches the switch.
+3. Every motor C step reads INT1, twice in a row to debounce (0x044D). INT1
+   low sets flag 0x2E.6.
+4. When the switch trips, 0x04B3 cuts the remaining count to 36 or 37
+   half-steps, keeping the phase, so the motor decelerates rather than
+   stopping dead.
+5. Creep back 2 half-steps at a time until INT1 goes high again
+   (0x0096–0x00A3).
+6. Step 12 more half-steps. This point is position 0.
+
+**Motor A** (0x0325 and 0x033B): during every motor A step, the firmware
+reads the shift register. With flag 0x2B.0 set it watches for bit 0 going
+low; with 0x2B.1 set, for bit 0 going high. When the edge arrives, the rest
+of the move is cut to exactly 16 half-steps, using a second pass if needed.
+The two actions that use this:
+
+- **0xC1 0x04** (0x0E46): search up to 576 half-steps for the rising edge.
+  Then 16 + 116 half-steps, a pulse on pin P2.4, then 88 more. Sets flag
+  0x2B.2.
+- **0xC1 0x08** (0x0E9D): search up to 1318 half-steps for the falling edge.
+  Then 16 + 900 half-steps. Clears 0x2B.2. 0xC1 0x04 runs this first when
+  0x2B.2 is set.
+- If the edge is not found, error bits are set in the status byte, a fault
+  latch (flag 0x23.1) blocks further motion commands, and the carousel parks.
+
+Motor A is not homed at reset. Flag 0x23.0 marks its position as unknown
+until an action succeeds, and the main loop reports bit 0 going low as an
+error (0x0E29). All of this applies only when the P2.3 option input read
+high at reset; otherwise the 0xC1 0x04/0x08 actions are refused. P2.3
+probably means "motor A mechanism fitted".
+
+**Motor D** (0x01E8, 0x01EE, 0x01F4, via 0x01FE):
+- 0x01E8 moves 96 half-steps towards state 0; 0x01EE moves 74. 0x01F4 moves
+  74 towards state 1.
+- At reset it runs 96 towards state 0, then 74 back to state 1. 96 is more
+  than the normal stroke, so this looks like driving into a hard stop to
+  find a reference, then backing off.
+- If P2.5 reads low twice in a row during a motor D move (0x027C), the
+  remaining count is cut to at most 12 half-steps. A latch (flag 0x23.3)
+  then blocks motor D, and status bit 0x29.1 reports it. P2.5 low at any
+  time also does this, and aborts the automatic sequence (0x076E). Several
+  motor D actions also check that P2.5 is high before starting. So P2.5 low
+  means "stop motor D": an end-of-travel, jam or safety input.
+
+**Motor B** has no sensor that the code reads. At reset, `motion_init`
+steps it 99 times, as 99 separate one-step moves (0x0088), then sets its
+position to 1. Some observations:
+
+- 99 is just over one revolution of 96. Merely locking the rotor to the
+  drive phases would need about 6 steps; a full turn is only needed when
+  searching the whole circle for something.
+- Single, separate steps are what makes a stepper stall cleanly against an
+  obstruction. A 3-phase variable-reluctance motor has no magnet, so
+  stalling against a stop does it no harm.
+- A **permanent** stop is ruled out: `set_b_target` moves through the 96→1
+  wrap (from position 1 to 96 is one step backwards), and the automatic
+  sequence moves both ways by uneven amounts. Some legal move would hit any
+  fixed stop.
+- The 99 steps happen **while motor C is parked 36 half-steps past its home
+  switch**, between steps 4 and 5 of motor C's homing. Normal motor C
+  positions start after the step 6 offset, so that overtravel zone is
+  reached only during homing.
+
+The likeliest explanation is that motor C's carriage, parked in its
+overtravel zone, puts an arm or pin into a single notch in the carousel's
+path. The carousel turns until the notch meets it and stalls there: position
+1. When motor C backs off, the carousel is free to turn either way. That
+explains the order of the homing moves, the full revolution, the absence of
+a sensor, and why wrap-around moves are safe afterwards. Other explanations
+can't be excluded: the carousel may be indexed mechanically by the operator,
+for example with a keyed tray. Confidence: high that there is no permanent
+stop, low to medium for the motor C arm.
+
+### Parking and control modes
+
+Flag 0x22.6, reported to the host as status bit 0x29.6, marks the machine
+as **parked**:
+
+- Parking (`b_to_position_1`, 0x0AE7) moves the carousel to position 1,
+  motor C to position 960 and motor D to state 1.
+- The machine starts parked after every reset.
+- Any accepted 0xC0 command with bit 2 of its second byte clear parks the
+  machine (if not already parked). With bit 2 set, it **unparks**: clears
+  the flag and returns motor C to its saved position.
+- While parked, motion commands and 0xC1 actions are refused, and the
+  front-panel jog and action keys work. While unparked, the host has the
+  mechanism, and most keys only report to it.
 
 ### Automatic sequences
 
-0x0CFD runs one of two automatic sequences, chosen by flag 0x20.2:
+0x0CFD runs one of two automatic sequences, chosen by flag 0x20.2. Pressing
+front-panel keys 3 and 4 together while parked starts them. While one runs,
+key 2 toggles between them and key 4 stops it, re-homes and restarts.
 
 - **Sweep (0x20.2 set, 0x06F4).** Steps an index between 0x01 and 0x83,
   reversing at each end, moving motor C 0x18 (24) half-steps per index:
@@ -166,8 +285,10 @@ low 4 bits in the other.
   | anything else | 0x23 positions back the other way, and R7 resets to 0 |
 
   R7 peaks at 0x52 (82). Its speed classes come from the table at 0x0FBE
-  (see below). Whether this is homing, a self-test or a fixed presentation
-  pattern is open.
+  (see below).
+
+Since a key combination starts them, these are most likely a demonstration
+or burn-in mode for service use.
 
 ### Speed tables
 
@@ -196,33 +317,59 @@ low 4 bits in the other.
   0x04. The entry, multiplied by 0xB0 or 0x40 (flag 0x2E.2), is subtracted
   from the running Timer 1 count, lengthening the step period. R5 = 0x39
   selects 0x00 (no adjustment) and 0x3A selects 0xB7. The long run of
-  repeating `1C 12 0B` beyond the used indexes looks like filler.
+  repeating `1C 12 0B` beyond the used indexes looks like filler. Shift
+  register bit 7 selects the 0x04/0x08 starting values (0x0225).
 
 ### Inputs
 
-- The INT1 pin (P3.3) is read twice in a row as a debounced sensor (0x044D):
-  likely a home or limit switch.
-- Pin P2.5 is polled in several places.
-- An external parallel-in shift register (e.g. a 74x165) is read at 0x098A:
-  P2.0 = load, P2.1 = clock, P2.2 = data, 8 bits, most significant bit
-  first. This chip turns 8 input lines into a serial stream on 3 pins. The
-  routine returns bit 0 in the carry flag, copies bit 7 to flag 0x2C.5, and
-  returns bits 1–6 inverted (so they are active-low inputs) with bits 0 and
-  7 cleared. Callers test the carry and whether any of bits 1–6 is active;
-  waits (0x0ED7) can be cut short by bits 5 or 6. What each input is
-  connected to isn't recoverable from the code.
-- Pin P2.3 is read once at every reset (0x0F15): OPTION_P23 (internal 0x3B)
-  = 0xA5 if it reads high, 0xA0 if low. An option jumper or presence line.
-  Some 0xC1 actions are refused without it, and the host can read it with
-  `DE 00`.
+| Input                   | Read at                | Meaning (inferred)                                                                                                                                                        |
+| ----------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| INT1 pin (P3.3)         | 0x044D, 0x00A0         | Motor C home switch. Low = at home.                                                                                                                                       |
+| T0 pin (P3.4)           | 0x0866, 0x0567         | Interlock. Homing waits until it is high; low while unparked, checked during moves, restarts the firmware (re-homing everything). A door, cover or motor-power-OK signal. |
+| INT0 pin (P3.2)         | interrupt              | Forces a restart. Also timed during the factory loopback test.                                                                                                            |
+| P2.5                    | 0x027C, 0x076E         | Low = stop motor D and report an error.                                                                                                                                   |
+| P2.3                    | 0x0F2D, once per reset | Option: motor A mechanism fitted (high).                                                                                                                                  |
+| Shift register bit 0    | 0x0325, 0x0E29         | Motor A position flag. Both edges used.                                                                                                                                   |
+| Shift register bits 1–6 | 0x053F, 0x0B6F         | Front-panel keys, active-low, debounced over 5 reads.                                                                                                                     |
+| Shift register bit 7    | 0x0225                 | Raw (not inverted). Selects a slower motor C start profile. A switch or jumper.                                                                                           |
 
-### Other outputs
+The shift register is an external parallel-in chip (e.g. a 74x165), read at
+0x098A: P2.0 = load, P2.1 = clock, P2.2 = data, 8 bits, most significant
+bit first. It turns 8 input lines into a serial stream on 3 pins. The
+routine returns bit 0 in the carry flag, copies bit 7 to flag 0x2C.5, and
+returns bits 1–6 inverted with bits 0 and 7 cleared.
 
-- Pins P3.7 (normally RD) and P3.6 (normally WR, here inverted) carry status
-  from the main loop.
-- Pin P3.5 (normally T1): set or cleared with the Timer 0 speed setting
-  (above).
-- Pins P2.3, P2.4, P2.6 and P2.7 are also driven.
+Front-panel keys (handler 0x0B6F), ignored while the automatic sequence runs
+except as described above:
+
+| Key (bit) | Parked                                                             | Unparked |
+| --------- | ------------------------------------------------------------------ | -------- |
+| 5, 6      | Jog motor A one way / the other, faster while held                 | —        |
+| 3 + 4     | Start the automatic sequence                                       | —        |
+| 3         | Cycle motor D: 96 to state 0, 74 back to state 1 (needs P2.5 high) | —        |
+| 2         | Pulse P2.4, then 88 half-steps of motor A                          | —        |
+| 1         | No host: move motor A 1056 half-steps                              | Same     |
+| 4         | —                                                                  | —        |
+
+With a host connected (after the start-up handshake), presses of keys 1–4
+are also reported to it: status bit 0x29.2, with the key in byte 0x24. Key
+5 jogs with A_DIR clear, key 6 with it set; holding a key repeats the move
+with longer steps (0x0601). The gating depends on several more flags; this
+table is a simplification.
+
+### Outputs other than motors
+
+- **P2.4:** pulsed during motor A's 0xC1 0x04 action, between the 116- and
+  88-step moves, and by key 2. A signal to other equipment that the
+  mechanism has reached a point in its cycle.
+- **P2.3:** pulsed at the start of the 0xC1 0x04 action (0x0E59). The same
+  pin is read as the option input at reset; 8051 port pins can do both.
+- **P2.7:** high while motor C is moving (set at 0x03F0, cleared at 0x045E).
+  Perhaps a driver enable or current boost.
+- **P2.6:** pulsed low while the Timer 0 speed setting is loaded (0x01C7).
+- **P3.5** (normally T1): set or cleared with the Timer 0 speed setting.
+- **P3.7** (normally RD) and **P3.6** (normally WR, inverted): status from
+  the main loop.
 
 ### Serial link
 
@@ -254,27 +401,38 @@ Decoded at 0x0D5E and 0x0B05. First byte (R7), second byte (R6):
 | 0x90–0x9F                          | count low (bit 0 ignored)                  | Motor C: move by ((R7 bits 0–2) × 256 + R6) half-steps, direction R7 bit 3, within the 0–0x0C60 limit.                                                                      |
 | 0xA0–0xAF                          | bits 0–6: motor B target                   | Motor B to position R6 (1–0x60), speed class R7 bits 0–1.                                                                                                                   |
 | 0xB0–0xBF                          |                                            | Rejected.                                                                                                                                                                   |
-| 0xC0                               | 0x00                                       | No action (status reply).                                                                                                                                                   |
+| 0xC0                               | 0x00                                       | No other action (see bits 2 and 6 below).                                                                                                                                   |
 | 0xC0                               | 0x80 or 0xC0                               | Enter echo mode (start-up sequence; see above).                                                                                                                             |
 | 0xC0                               | 0x01                                       | Re-initialise: clear RAM and accept all frames.                                                                                                                             |
 | 0xC0                               | 0x02                                       | Leave read mode.                                                                                                                                                            |
 | 0xC1                               | 0x40                                       | Enter read mode.                                                                                                                                                            |
-| 0xC1                               | 0x20, 0x10, 0x08, 0x04                     | Mechanism actions (0x01F4, 0x0AE7, 0x0E9D, 0x0E46); rejected while busy or in read mode. 0x08 and 0x04 are refused if P2.3 read low at reset (internal 0x3B = 0xA0).        |
+| 0xC1                               | 0x20                                       | Motor D to state 1, if not already there.                                                                                                                                   |
+| 0xC1                               | 0x10                                       | Park: carousel to position 1, motor C to 960, motor D to state 1.                                                                                                           |
+| 0xC1                               | 0x08                                       | Motor A action: to the falling edge of its flag, then 916 half-steps on. Needs P2.3 high.                                                                                   |
+| 0xC1                               | 0x04                                       | Motor A action: to the rising edge, 132 half-steps, pulse P2.4, 88 more. Needs P2.3 high.                                                                                   |
 | 0xD0, 0xD1, 0xD2, 0xD4, 0xD8, 0xDE | 0x00                                       | In read mode: reply with internal RAM byte 0x30, 0x31, 0x32, 0x33, 0x34 or 0x3B (0x3B is the P2.3 option byte). Outside read mode these go to 0x0A93, not decoded.          |
 | anything else                      |                                            | Rejected: error flags set.                                                                                                                                                  |
 
-Moves are refused while another is in progress. The meaning of the four 0xC1
-actions isn't clear from the code; 0x0AE7 sends motor B to position 1, and
-the others involve the shift-register inputs, so they may be homing or
-calibration routines.
+For every accepted 0xC0 command, bit 6 of the second byte sets the parity
+sense and bit 2 parks (clear) or unparks (set) the machine (0x0A38). So
+`C0 00` parks, and `C0 04` hands the mechanism to the host. An earlier
+version of this analysis described `C0 00` as doing nothing.
+
+Motion commands (0x00–0xBF) are refused while parked, in read mode, or after
+a motor A fault (0x0D6E). Before moving, they put motor D in state 0. The
+0xC1 actions other than read mode are refused while parked, in read mode or
+after a motor A fault. Moves are refused while another is in progress.
 
 ### Start-up and self-test
 
-- Reset clears internal RAM 0x08–0x42, keeping a few flags.
+- Reset clears internal RAM 0x08–0x42, keeping a few flags, and reads the
+  P2.3 option.
 - The TXD pin is toggled and the RXD pin watched. If they follow each other
   (a loopback plug), the firmware measures a pulse on the INT0 pin with
   Timer 0, sends 0xAA, 0x00, 0xFE and 0x55, checks each comes back, then
   stops. That looks like a factory test mode.
+- Otherwise: all outputs idle, wait for the T0 interlock, home motors C and
+  B, then home motor D, move motor C to 960 and start parked.
 
 ### Memory layout
 
@@ -286,23 +444,27 @@ addresses within the same 2 KB block. 0x0FFA–0x0FFE is 0xFF and 0x0FFF is
 
 ## Possible applications
 
-The firmware controls a 96-position circular axis, a linear axis that sweeps
-back and forth in fixed increments, and a third motor making relative moves,
-all commanded over a serial bus. Confidence in that much is moderate to good.
-Candidates for the product, most likely first, all low confidence:
+Everything here is inferred from the code alone: there is no hardware, no
+board and no documentation. The firmware controls a 96-position carousel, a
+linear axis that parks out of the way, a one-way rotary mechanism with a
+position flag and an output pulse, and a two-position mechanism, all
+commanded over a serial bus, with a small front panel for jogging and a
+demonstration mode. Confidence in that much is moderate to good. Candidates
+for the product, most likely first, all low confidence:
 
 1. **HPLC/GC autosampler or sample injector.** The carousel selects one of 96
    vials, the linear axis moves the needle between vial, injection and wash
-   positions, and the third motor drives the syringe or a probe. The
-   shift-register inputs would suit vial-present, needle-home, syringe-home
-   and door sensors, and the 0xC1 actions homing, wash, purge or inject.
-   96-vial carousels are a standard autosampler layout.
+   positions, and motor A drives a syringe or injection valve through a cam.
+   The P2.4 pulse after motor A's cycle would be the "injected, start run"
+   signal to the chromatograph. Motor D could be a vial clamp or cover lock,
+   released before every move. 96-vial carousels are a standard autosampler
+   layout.
 2. **Laboratory sample changer, e.g. a gamma counter carousel:** a 96-tube
    carousel, an elevator, a pipettor.
 3. **Microplate handler:** possible, but a 96-position carousel suggests vials
    or tubes more than a rectangular plate.
-4. **Filter wheel or turret with a scanning stage:** possible, but the third
-   motor and command set look more like a sample handler.
+4. **Filter wheel or turret with a scanning stage:** possible, but motor A's
+   cam action and the output pulse look more like a sample handler.
 5. **Camera pan/tilt head:** unlikely. The 96-position wrap-around axis is too
    instrument-like.
 
@@ -310,12 +472,12 @@ Candidates for the product, most likely first, all low confidence:
 
 No evidence that the two were used together:
 
-|                | OKI MSM83C154                             | SCN8031H                                             |
-| -------------- | ----------------------------------------- | ---------------------------------------------------- |
-| Date           | 1985 or later, probably 1994              | 1984                                                 |
-| Serial format  | 7 data bits + odd parity per channel byte | 8 data bits + parity in the 9th bit                  |
-| Command values | 0x06, 0x07, 0x0B, 0x15, 0x16, 0x20–0x23   | 0x00–0xAF (moves), 0xC0, 0xC1, 0xD0–0xDE             |
-| Function       | Log-scale readings from 8 smart heads     | Three motors: carousel, linear sweep, relative moves |
+|                | OKI MSM83C154                             | SCN8031H                                                               |
+| -------------- | ----------------------------------------- | ---------------------------------------------------------------------- |
+| Date           | 1985 or later, probably 1994              | 1984                                                                   |
+| Serial format  | 7 data bits + odd parity per channel byte | 8 data bits + parity in the 9th bit                                    |
+| Command values | 0x06, 0x07, 0x0B, 0x15, 0x16, 0x20–0x23   | 0x00–0xAF (moves), 0xC0, 0xC1, 0xD0–0xDE                               |
+| Function       | Log-scale readings from 8 smart heads     | Four motors: carousel, linear axis, rotary cam, two-position mechanism |
 
 None of the OKI's protocol values appear in this ROM. Functionally, though,
 the two are complementary: the OKI looks like a multi-channel measurement
@@ -329,8 +491,9 @@ link speculative.
 
 ## Open questions
 
-- What the four 0xC1 mechanism actions do, and what the shift-register
-  inputs are connected to.
+- What the mechanisms are physically. Nothing beyond the code is known.
+- How the carousel (motor B) finds position 1: a stop engaged by motor C's
+  overtravel, an operator-indexed tray, or something else.
+- What P2.5 and the T0 interlock are connected to.
 - What the Timer 0 speed-setting parameters (bank 1 R2/R3) control.
-- What the scripted carousel sequence is for.
 - Whether 0x05E3 is a separate ramp reached by offset.

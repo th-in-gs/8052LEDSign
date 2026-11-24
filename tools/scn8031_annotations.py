@@ -24,6 +24,11 @@ IRAM = {
     0x42: 'P1_SHADOW',      # P1 copy: low nibble = motor C pattern
     0x43: 'PHASE_A',        # motor A pattern, P0 bits 4-7
     0x44: 'P0_SHADOW',      # P0 copy
+    0x0D: 'D_STEPS',        # motor D: steps to move (bank 1 R5)
+    0x0E: 'PHASE_D',        # motor D pattern, P1 bits 4-7 (bank 1 R6)
+    0x11: 'PHASE_C',        # motor C pattern, P1 bits 0-3 (bank 2 R1)
+    0x38: 'C_SAVED_HI',     # motor C: position to return to after parking
+    0x39: 'C_SAVED_LO',
 }
 
 BITS = {
@@ -38,6 +43,23 @@ BITS = {
     0xA0: 'SR_LOAD',        # P2.0: shift register load
     0xA1: 'SR_CLK',         # P2.1: shift register clock
     0xA2: 'SR_DATA',        # P2.2: shift register data in
+    0xA4: 'PULSE_OUT',      # P2.4: pulsed during motor A's 0xC1 0x04 action
+    0xA5: 'D_STOP_IN',      # P2.5: low = stop motor D, report an error
+    0xA7: 'C_MOVING',       # P2.7: high while motor C moves
+    0xB3: 'C_HOME',         # P3.3 (INT1 pin): motor C home switch, low = home
+    0xB4: 'INTERLOCK',      # P3.4 (T0 pin): low = wait / restart
+    0x16: 'PARKED',         # 22h.6: parked; host motion refused, panel keys live
+    0x18: 'A_UNKNOWN',      # 23h.0: motor A position unknown or flag low
+    0x19: 'A_FAULT',        # 23h.1: motor A flag edge not found
+    0x1B: 'D_FAULT',        # 23h.3: P2.5 went low; motor D blocked
+    0x42: 'D_STATE',        # 28h.2: motor D state (0 or 1)
+    0x4E: 'ST_PARKED',      # 29h.6: status bit: parked
+    0x58: 'A_STOP_ON_LOW',  # 2Bh.0: stop motor A 16 steps after flag goes low
+    0x59: 'A_STOP_ON_HIGH', # 2Bh.1: stop motor A 16 steps after flag goes high
+    0x5A: 'A_CAM_STATE',    # 2Bh.2: set by the 0xC1 0x04 action, cleared by 0x08
+    0x60: 'C_HOMING',       # 2Ch.0: cut the motor C move short at the home switch
+    0x66: 'D_DIR',          # 2Ch.6: motor D direction (1 = towards state 1)
+    0x76: 'C_HOME_HIT',     # 2Eh.6: home switch seen during a motor C move
 }
 
 LABELS = {
@@ -68,7 +90,31 @@ LABELS = {
     0x0F9F: 'sequence_speed_class',
     0x0CFD: 'auto_sequence',
     0x0D05: 'carousel_sequence',
-    0x0AE7: 'b_to_position_1',
+    0x0AE7: 'park',
+    0x01E8: 'd_to_state0_overdrive',
+    0x01EE: 'd_to_state0',
+    0x01F4: 'd_to_state1',
+    0x01FE: 'run_d_move',
+    0x0256: 'step_d',
+    0x026C: 'd_step_tick',
+    0x027C: 'check_d_stop',
+    0x0325: 'check_a_flag',
+    0x033B: 'a_stop_in_16',
+    0x04B3: 'c_home_cutoff',
+    0x053F: 'scan_keys',
+    0x0567: 'check_interlock',
+    0x0601: 'jog_a',
+    0x0861: 'rehome_all',
+    0x0896: 'a_pulse_and_advance',
+    0x0A38: 'c0_park_bits',
+    0x0B6F: 'key_handler',
+    0x0C4C: 'start_auto_sequence',
+    0x0E29: 'check_a_flag_idle',
+    0x0E46: 'a_action_04',
+    0x0E9D: 'a_action_08',
+    0x0FE0: 'c_to_saved',
+    0x0FE9: 'c_to_park',
+    0x0FF2: 'short_delay',
     0x031A: 'ramp_c',
     0x03A1: 'output_phase_b',
     0x0434: 'next_phase_c',
@@ -116,6 +162,18 @@ SUMMARY = {
     0x0CBF: 'move towards target position',
     0x0ED7: 'wait, polling the shift register inputs',
     0x0F15: 'clear iRAM 08h-42h, keep some flags',
+    0x0AE7: 'carousel to 1, C to 960, D to state 1',
+    0x01E8: 'motor D 96 steps towards state 0',
+    0x01EE: 'motor D 74 steps towards state 0',
+    0x01F4: 'motor D 74 steps towards state 1',
+    0x0E46: 'motor A to flag rising edge, pulse P2.4',
+    0x0E9D: 'motor A to flag falling edge',
+    0x0FE0: 'motor C back to its saved position',
+    0x0FE9: 'motor C to 960',
+    0x0FF2: 'short delay',
+    0x0861: 'outputs idle, wait for interlock, home C and B',
+    0x0896: 'pulse P2.4, then motor A 88 steps',
+    0x0601: 'jog motor A while key 5 or 6 is held',
 }
 
 BLOCKS = {
@@ -136,8 +194,84 @@ address 0000h.""",
 0x0026: """\
 Put all outputs in their idle state: P0 and P1 high, P2 = E7h.""",
 
+0x0064: """\
+Homing at reset (called with motors idle, after the interlock is high).
+Motor C: back off 50 half-steps, then drive up to 0D98h (3480) towards home
+with C_HOMING set; c_home_cutoff ends the move 36-37 half-steps after the
+switch (INT1) trips. Motor B: 99 single-step moves (just over one turn of
+96) while C is parked past its switch; no sensor is read, so B probably
+stalls against something C's overtravel puts in its path. Motor C: creep
+back 2 half-steps at a time until the switch releases, then 12 more.
+Position 0 is there.""",
+
+0x01E8: """\
+Motor D, P1 bits 4-7: a two-position mechanism about 74 half-steps between
+states, state in D_STATE. Stepped from the motion loop (d_step_tick) at a
+fixed rate. 96 steps towards state 0 overdrives it, presumably against a
+hard stop. A move is refused once D_FAULT is set.""",
+
+0x026C: """\
+Motor D step, from the motion loop: count down a fixed delay (R4), then
+check P2.5 and step. D_STEPS counts the steps.""",
+
+0x027C: """\
+P2.5 low on two successive steps: report it (check_p25_input) and cut the
+remaining motor D move to at most 12 steps.""",
+
+0x0325: """\
+Motor A position flag: shift register bit 0 (in C). With A_STOP_ON_LOW set,
+stop 16 steps after it goes low; with A_STOP_ON_HIGH, after it goes high.""",
+
+0x033B: """\
+Cut the remaining motor A move to 16 steps. If fewer remain, set 2Fh.3 so
+run_move makes a second pass for the rest.""",
+
+0x04B3: """\
+While homing, once the switch has been seen, cut the remaining motor C
+count to 24h steps, keeping the phase (bit 0).""",
+
+0x053F: """\
+Front-panel keys: report a change once the same non-zero value has been
+read 5 times in a row (flag 2Ch.7 for key_handler).""",
+
+0x0567: """\
+Interlock: INTERLOCK (T0 pin) low, read twice, while not parked -> restart
+the firmware, which re-homes everything.""",
+
+0x0601: """\
+Jog motor A while key 5 (one way) or key 6 (the other) is held: a short
+move, then longer moves as long as the key stays down.""",
+
+0x0A38: """\
+For every accepted C0h command: second byte bit 6 = parity sense, bit 2 set
+= unpark (clear PARKED, motor C back to its saved position), bit 2 clear =
+park if not parked.""",
+
+0x0B6F: """\
+Front-panel key handler (keys = shift register bits 1-6, active-low).
+While parked: keys 5/6 jog motor A, keys 3+4 start the automatic sequence,
+key 3 cycles motor D, key 2 pulses P2.4 and advances motor A. With no host,
+key 1 moves motor A 1056 steps. With a host connected, presses are reported
+in status bit 29h.2 and byte 24h. While the automatic sequence runs, key 4
+stops it (re-home and restart) and key 2 switches sequence.""",
+
+0x0E29: """\
+With the motor A option fitted, report motor A's flag reading low twice
+(A_UNKNOWN and status error bits).""",
+
+0x0E46: """\
+C1h 04h: motor A forward until its flag goes high (at most 240h steps),
+16 + 116 more, pulse P2.4, 88 more; sets A_CAM_STATE. Runs a_action_08 first
+if A_CAM_STATE is set. No edge: A_FAULT, status error, park. Motor C goes
+to 960 first and back afterwards. Refused without the P2.3 option.""",
+
+0x0E9D: """\
+C1h 08h: motor A forward (same direction as 04h) until its flag goes low
+(at most 526h steps), then 16 + 900 more; clears A_CAM_STATE. No edge:
+A_FAULT, status error, park. Refused without the P2.3 option.""",
+
 0x0151: """\
-Timer 0: steps motor A (P0 low nibble) or motor B (P0 high nibble),
+Timer 0: steps motor A (P0 high nibble) or motor B (P0 low nibble),
 whichever is moving. When bit 27h.7 is set, timer0_alt runs instead.""",
 
 0x0185: """\
@@ -150,7 +284,8 @@ P1 through a shadow copy so the other nibble is kept. Outputs idle high, so
 coils appear to be active-low.
   Motor A: P0 bits 4-7, half-step table at 04CCh.
   Motor B: P0 bits 0-3, 3-phase table at 039Ah, bit 3 always set.
-  Motor C: P1 bits 0-3, half-step table at 04CCh.""",
+  Motor C: P1 bits 0-3, half-step table at 04CCh.
+  Motor D: P1 bits 4-7, half-step table at 04CCh (step_d).""",
 
 0x038A: """\
 Motor B, 3-phase: next pattern from the table at 039Ah, indexed by the low
@@ -180,12 +315,14 @@ C1h cmd_C1, D0h-DFh cmd_Dx, anything else rejected. Then a 1-byte reply:
 TX_BYTE, normally the status byte at 29h.""",
 
 0x09FC: """\
-C0h xx: 00 = no action; 80 or C0 = enter echo mode; 01 = re-initialise and
-accept all frames; 02 = leave read mode.""",
+C0h xx: 00 = nothing else; 80 or C0 = enter echo mode; 01 = re-initialise
+and accept all frames; 02 = leave read mode. Bits 2 and 6 are masked off
+here and applied by c0_park_bits.""",
 
 0x09BB: """\
-C1h xx: 40 = enter read mode; 20, 10, 08, 04 = mechanism actions (01F4h,
-b_to_position_1, 0E9Dh, 0E46h), refused while busy or in read mode.""",
+C1h xx: 40 = enter read mode; 20 = motor D to state 1; 10 = park;
+08, 04 = motor A actions (a_action_08, a_action_04). Refused while parked,
+in read mode or after a motor A fault.""",
 
 0x0A54: """\
 Dxh 00 in read mode: reply with the byte at 30h (D0), 31h (D1), 32h (D2),
