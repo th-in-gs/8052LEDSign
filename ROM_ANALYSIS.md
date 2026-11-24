@@ -21,12 +21,12 @@ M83C154-42
 JAPAN 94000
 ```
 
-| Line | Reading | Confidence |
-|---|---|---|
-| `79X1396` | Either the equipment maker's own part number (mask-ROM chips are often marked with the customer's number) or an OKI customer/lot code. The `79X` prefix doesn't match any scheme found online. | Low |
-| `M83C154-42` | OKI MSM83C154, mask code 42. Consistent with OKI's `MSM83C154-xxx` ordering code, where xxx is the mask code. The package suffix is not marked. | Medium |
-| `©OKI '80/85` | Copyright line, not a date code. The years may refer to the MCS-51 architecture and OKI's CMOS version, or may simply be copyright years. | Low |
-| `JAPAN 94000` | Probably date and lot. OKI's format isn't documented online. 1994 is plausible, but the fifth digit makes "date + lot" safer than a specific month. | Low |
+| Line          | Reading                                                                                                                                                                                        | Confidence |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `79X1396`     | Either the equipment maker's own part number (mask-ROM chips are often marked with the customer's number) or an OKI customer/lot code. The `79X` prefix doesn't match any scheme found online. | Low        |
+| `M83C154-42`  | OKI MSM83C154, mask code 42. Consistent with OKI's `MSM83C154-xxx` ordering code, where xxx is the mask code. The package suffix is not marked.                                                | Medium     |
+| `©OKI '80/85` | Copyright line, not a date code. The years may refer to the MCS-51 architecture and OKI's CMOS version, or may simply be copyright years.                                                      | Low        |
+| `JAPAN 94000` | Probably date and lot. OKI's format isn't documented online. 1994 is plausible, but the fifth digit makes "date + lot" safer than a specific month.                                            | Low        |
 
 No datasheet or independent part listing mentions `79X1396` or
 `M83C154-42` (searched 2026-11-23). The markings suggest the chip was made
@@ -65,16 +65,16 @@ Build: `pio run -e mcs51 -t upload` (see `platformio.ini` and `README.md`).
 
 ## Overview
 
-| Item | Value |
-|---|---|
-| Reset vector | 0x0000 → 0x10E8 |
-| INT0 vector | 0x0003 → 0x0030 |
-| Timer 1 / Timer 2 vectors | 0x001B / 0x002B → 0x0637 |
-| ROM checksum | 16-bit sum of 0x0000–0x3FFC = 0x45B9, stored at 0x3FFE–0x3FFF as `B9 45` |
-| Config byte | 0x3FFD (00h in this dump) |
-| ASCII strings | None |
-| Code reached by recursive disassembly | 12,685 of 16,384 bytes |
-| Unused | 0x36CA–0x3FFC (zero-filled) |
+| Item                                  | Value                                                                    |
+| ------------------------------------- | ------------------------------------------------------------------------ |
+| Reset vector                          | 0x0000 → 0x10E8                                                          |
+| INT0 vector                           | 0x0003 → 0x0030                                                          |
+| Timer 1 / Timer 2 vectors             | 0x001B / 0x002B → 0x0637                                                 |
+| ROM checksum                          | 16-bit sum of 0x0000–0x3FFC = 0x45B9, stored at 0x3FFE–0x3FFF as `B9 45` |
+| Config byte                           | 0x3FFD (00h in this dump)                                                |
+| ASCII strings                         | None                                                                     |
+| Code reached by recursive disassembly | 12,685 of 16,384 bytes                                                   |
+| Unused                                | 0x36CA–0x3FFC (zero-filled)                                              |
 
 The 8052's hardware UART is not used: there are no SBUF or SCON accesses.
 P3.0 and P3.1 are used as general-purpose outputs.
@@ -96,10 +96,10 @@ placed in this space, each register at its own address.
 This firmware runs from internal ROM and uses no external RAM. Every `MOVX`
 in it is a peripheral access. There are two regions:
 
-| Region | Accessed with | What is there (inferred) |
-|---|---|---|
+| Region      | Accessed with                                                                 | What is there (inferred)                                                                                                                                                                                                                                                         |
+| ----------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | FFD9h–FFFFh | `MOVX @R0/@R1`, with P2 at its reset value FFh (normal code never changes P2) | **Channel/host interface.** Status registers (D9h, DAh, DEh, DFh), the per-channel data window (E0h–EFh), channel command bytes (F0h–F7h), the host mailbox (F8h–FFh), and write-only controls such as the watchdog (E3h). Possibly several chips separated by address decoding. |
-| 0000h–000Ah | `MOVX @DPTR`, with DPH = 00h | **Link controller.** Status, command, indirect index and data, message FIFO, destination. |
+| 0000h–000Ah | `MOVX @DPTR`, with DPH = 00h                                                  | **Link controller.** Status, command, indirect index and data, message FIFO, destination.                                                                                                                                                                                        |
 
 The same hardware interrupts the CPU on INT0. IRQ_STATUS (D9h) and
 HOST_STATUS (DFh) say which part needs attention.
@@ -172,12 +172,12 @@ The three interfaces in detail:
   - Exit: host writes FAh.
   - Command 8xh writes and Axh reads. Bits 0–3 pick the target:
 
-    | Bit | Target |
-    |---|---|
-    | 0 | Internal RAM through `@R0` (00h–FFh; not the SFRs) |
-    | 1 | External RAM (`MOVX @R0`, page set by P2) |
-    | 2 | Link controller register (`MOVX @DPTR`, DPH = 00h) |
-    | 3 | Port: P1, P2 or P3 (address < 2, = 2, > 2) |
+    | Bit | Target                                             |
+    | --- | -------------------------------------------------- |
+    | 0   | Internal RAM through `@R0` (00h–FFh; not the SFRs) |
+    | 1   | External RAM (`MOVX @R0`, page set by P2)          |
+    | 2   | Link controller register (`MOVX @DPTR`, DPH = 00h) |
+    | 3   | Port: P1, P2 or P3 (address < 2, = 2, > 2)         |
 
     SFRs other than the ports, and program memory, are not reachable.
   - Address comes from FFh and data from FEh. Read results go to FAh. The
@@ -219,15 +219,15 @@ Upper internal RAM 80h–DFh holds a 12-byte record per channel, at
 80h + 12(n−1). `check_window_block` (0x2E34–0x2E6D) fills it from the
 configuration block, shifting bit fields down to the low bits:
 
-| Offset | Contents |
-|---|---|
-| +0 | WIN_E0 bits 6–4 (type, 0–7) |
-| +1 | WIN_E0 bits 3–0 |
-| +2..+7 | WIN_E1..E6 |
-| +8 | WIN_E7 bits 5–4 |
-| +9 | WIN_E8 bits 7–6 |
-| +A | WIN_E8 bits 5–4 |
-| +B | WIN_E9 |
+| Offset | Contents                    |
+| ------ | --------------------------- |
+| +0     | WIN_E0 bits 6–4 (type, 0–7) |
+| +1     | WIN_E0 bits 3–0             |
+| +2..+7 | WIN_E1..E6                  |
+| +8     | WIN_E7 bits 5–4             |
+| +9     | WIN_E8 bits 7–6             |
+| +A     | WIN_E8 bits 5–4             |
+| +B     | WIN_E9                      |
 
 WIN_E0 bit 7 is not stored; MSG_FLAGS (74h) bit 7 is set to its inverse
 instead (0x021D). WIN_E0 bit 6 selects MSG_PARAM (19h): 06h if set, 04h if
@@ -253,14 +253,14 @@ Part number unknown.
 - Reset pulse comes from P3.3.
 - Two ways in: direct registers, plus an indirect register file.
 
-| Register | Use |
-|---|---|
-| 1 | Status. Bit 4 = ready for a new message (polled up to 100 times after command 04h, 0x0584). Bit 6 = message received (polled in 0x052F). |
-| 2 | Write: indirect register number; bit 3 set = select for reading. Read: bit 7 = ready for an indirect access (polled up to 200 times, 0x2F41). |
-| 3 | Command. 04h = prepare to send, 01h = send, 08h = release receive buffer. |
-| 7 | Indirect data port. |
-| 8 | Message FIFO (data in and out). |
-| 0Ah | Destination: 2Fh+n (30h–37h) or FFh+n (= n−1, 00h–07h). |
+| Register | Use                                                                                                                                           |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1        | Status. Bit 4 = ready for a new message (polled up to 100 times after command 04h, 0x0584). Bit 6 = message received (polled in 0x052F).      |
+| 2        | Write: indirect register number; bit 3 set = select for reading. Read: bit 7 = ready for an indirect access (polled up to 200 times, 0x2F41). |
+| 3        | Command. 04h = prepare to send, 01h = send, 08h = release receive buffer.                                                                     |
+| 7        | Indirect data port.                                                                                                                           |
+| 8        | Message FIFO (data in and out).                                                                                                               |
+| 0Ah      | Destination: 2Fh+n (30h–37h) or FFh+n (= n−1, 00h–07h).                                                                                       |
 
 - **Indirect write:** data to reg 7, then the register number to reg 2.
   Register numbers used: 10h–17h (per channel, 0x2F41), 30h–37h (warm
@@ -288,12 +288,12 @@ kicks.
 
 First byte of each message sent through the link controller:
 
-| First byte | Data bytes | Notes |
-|---|---|---|
-| 03/43, 0B/4B, 13/53, 18/58, 23/63, 2B/6B | varies | Pairs differ only in bit 6. The first of each pair carries the configuration block: E1h..E8h, or E1h..E4h for 18h. |
-| 06, 26, 66 | 2, 2, 0 | Variants differ in bits 5–6 |
-| 27 | 1 | |
-| 30 | 4 (6 in one error case) | Channel readings (see below) |
+| First byte                               | Data bytes              | Notes                                                                                                              |
+| ---------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| 03/43, 0B/4B, 13/53, 18/58, 23/63, 2B/6B | varies                  | Pairs differ only in bit 6. The first of each pair carries the configuration block: E1h..E8h, or E1h..E4h for 18h. |
+| 06, 26, 66                               | 2, 2, 0                 | Variants differ in bits 5–6                                                                                        |
+| 27                                       | 1                       |                                                                                                                    |
+| 30                                       | 4 (6 in one error case) | Channel readings (see below)                                                                                       |
 
 Startup handshake (0x0BC2), per channel:
 1. Indirect write C0h to register 10h+(n−1).
@@ -342,13 +342,13 @@ Comparing each entry with the one N entries further along, and counting exact
 matches where only byte 0's low nibble differs (by 1), out of about 300
 positions:
 
-| N | Exact matches |
-|---|---|
-| 58 | 0 |
-| 59 | 0 |
-| **60** | **70** |
-| 61 | 3 |
-| 62 | 0 |
+| N      | Exact matches |
+| ------ | ------------- |
+| 58     | 0             |
+| 59     | 0             |
+| **60** | **70**        |
+| 61     | 3             |
+| 62     | 0             |
 
 - The low nibble takes only the values 0–4. It drops by 1 every 60 entries,
   at curve positions −96, −35, 25 and 85, and in 70 cases everything else
@@ -411,20 +411,20 @@ neighbours are about 9.99 × 10^e, it is a carry.
 
 ## Other tables
 
-| Address | Contents |
-|---|---|
-| 0x318E | Channel bit masks: `FF 01 02 04 08 10 20 40 80` (indexed 0–8) |
-| 0x3196 | Inverted channel masks: `80 FE FD FB F7 EF DF BF 7F` (shares its first byte with 0x318E) |
-| 0x1791 | Jump table of 35 `LJMP`s: per-channel state machine (dispatcher at 0x178D, `JMP @A+DPTR` at 0x1790). The state value is the byte offset into the table, so state = 3 × entry. States 4Eh–5Dh all go to 0x2CEC. |
+| Address | Contents                                                                                                                                                                                                       |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0x318E  | Channel bit masks: `FF 01 02 04 08 10 20 40 80` (indexed 0–8)                                                                                                                                                  |
+| 0x3196  | Inverted channel masks: `80 FE FD FB F7 EF DF BF 7F` (shares its first byte with 0x318E)                                                                                                                       |
+| 0x1791  | Jump table of 35 `LJMP`s: per-channel state machine (dispatcher at 0x178D, `JMP @A+DPTR` at 0x1790). The state value is the byte offset into the table, so state = 3 × entry. States 4Eh–5Dh all go to 0x2CEC. |
 
 Unreferenced: nothing in the code points at these (no DPTR setup, no
 `MOVC A,@A+PC`). They may be leftovers, or data for something not in this ROM.
 
-| Address | Contents |
-|---|---|
-| 0x308F | 256-byte bit-reverse table |
-| 0x319F | `03 03 0C 0C 30 30 C0 C0` |
-| 0x36C2 | Inverted bit masks: `FE FD FB F7 EF DF BF 7F` |
+| Address | Contents                                      |
+| ------- | --------------------------------------------- |
+| 0x308F  | 256-byte bit-reverse table                    |
+| 0x319F  | `03 03 0C 0C 30 30 C0 C0`                     |
+| 0x36C2  | Inverted bit masks: `FE FD FB F7 EF DF BF 7F` |
 
 ## Other routines
 
@@ -509,16 +509,16 @@ unlikely: there are no MIDI status bytes and the data has parity.
 
 ### What the design implies
 
-| Feature | Implication |
-|---|---|
-| Six-decade log scale, decimal exponent | A physical quantity measured across decades |
-| Two readings per channel, on different parts of the curve | Two related measurements, or two detectors/ranges per head |
-| Sentinel for out of range, `11 2B` for "invalid" | The receiver displays or logs these values |
-| Per channel: command byte, two readings, a configuration block with checksum, six device types | Smart remote sensor heads, not bare analog inputs |
-| 7-bit data plus odd parity on all channel bytes | Consistent with a serial-style link to each head |
-| ROM checksum, RAM tests, watchdog, stack check, reset cause reported to the host | Built for high reliability. Unusual for consumer equipment |
-| Host debug monitor | Intelligent I/O card under a supervisory CPU, serviced in the field |
-| Mask ROM, custom marking | Made in volume for one company's product |
+| Feature                                                                                        | Implication                                                         |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Six-decade log scale, decimal exponent                                                         | A physical quantity measured across decades                         |
+| Two readings per channel, on different parts of the curve                                      | Two related measurements, or two detectors/ranges per head          |
+| Sentinel for out of range, `11 2B` for "invalid"                                               | The receiver displays or logs these values                          |
+| Per channel: command byte, two readings, a configuration block with checksum, six device types | Smart remote sensor heads, not bare analog inputs                   |
+| 7-bit data plus odd parity on all channel bytes                                                | Consistent with a serial-style link to each head                    |
+| ROM checksum, RAM tests, watchdog, stack check, reset cause reported to the host               | Built for high reliability. Unusual for consumer equipment          |
+| Host debug monitor                                                                             | Intelligent I/O card under a supervisory CPU, serviced in the field |
+| Mask ROM, custom marking                                                                       | Made in volume for one company's product                            |
 
 ### Hypotheses, most likely first
 
