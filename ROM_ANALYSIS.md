@@ -79,16 +79,80 @@ Build: `pio run -e mcs51 -t upload` (see `platformio.ini` and `README.md`).
 The 8052's hardware UART is not used: there are no SBUF or SCON accesses.
 P3.0 and P3.1 are used as general-purpose outputs.
 
-## Revised picture
+## The hardware the firmware talks to
 
-The 8052 is an I/O controller sitting under a larger host computer. It has
-three interfaces.
+The 8052 is an I/O controller sitting under a larger host computer. Almost
+everything it does goes through **other chips on its external bus**, which
+were on the original board but are not part of this dump.
 
-External registers are accessed in two pages:
-- `MOVX @R0/@R1` with P2 at its reset value FFh (normal code never changes
-  P2), so FFxxh. This covers the host mailbox (FFF8h–FFFFh) and the channel
-  and status registers (FFD9h–FFF7h).
-- `MOVX @DPTR` with DPH = 00h, so 0000h–000Ah: the link controller.
+### Memory-mapped peripherals
+
+On an 8051, `MOVX` instructions read and write *external data memory*: the
+CPU puts an address on P0/P2, pulses RD or WR, and moves a byte over P0. The
+CPU cannot tell RAM from anything else at those addresses. Address-decoding
+logic on the board decides which chip answers, so peripheral chips can be
+placed in this space, each register at its own address.
+
+This firmware runs from internal ROM and uses no external RAM. Every `MOVX`
+in it is a peripheral access. There are two regions:
+
+| Region | Accessed with | What is there (inferred) |
+|---|---|---|
+| FFD9h–FFFFh | `MOVX @R0/@R1`, with P2 at its reset value FFh (normal code never changes P2) | **Channel/host interface.** Status registers (D9h, DAh, DEh, DFh), the per-channel data window (E0h–EFh), channel command bytes (F0h–F7h), the host mailbox (F8h–FFh), and write-only controls such as the watchdog (E3h). Possibly several chips separated by address decoding. |
+| 0000h–000Ah | `MOVX @DPTR`, with DPH = 00h | **Link controller.** Status, command, indirect index and data, message FIFO, destination. |
+
+The same hardware interrupts the CPU on INT0. IRQ_STATUS (D9h) and
+HOST_STATUS (DFh) say which part needs attention.
+
+```
+ Original board (inferred)
+
+         ┌─────────────────────────────┐
+         │ OKI MSM83C154               │
+         │ (code in internal ROM)      │
+         └──────────────┬──────────────┘
+                        │ P0/P2 bus, RD/WR
+         ┌──────────────┴──────────────┐
+         │ address decode              │
+         └────┬───────────────────┬────┘
+        FFxxh │                   │ 0000h
+ ┌────────────▼─────────┐ ┌───────▼─────────────┐
+ │ channel/host         │ │ link controller     │
+ │ interface            │ │ 0000h–000Ah         │
+ │ FFD9h–FFFFh          │ │                     │
+ │ (drives INT0)        │ │                     │
+ └──┬────────────┬──────┘ └──────────┬──────────┘
+    │            │                   │
+ host        8 channels          network / link
+ computer    (sensor heads)
+```
+
+None of these chips has been identified. Clues about their nature:
+
+- **Every read is done twice** (`MOVX A,@R1` twice in a row). That is
+  typical of a slow peripheral, or one where the first read latches the
+  value and the second returns it. It suggests a custom gate array or older
+  NMOS peripherals rather than RAM.
+- **Reads and writes at the same address often reach different
+  registers.** For example, FBh reads the host's debug command but writes
+  the channel toggle bits. Typical of peripheral chips and latches.
+- **The host mailbox** may be a dual-port RAM or mailbox chip shared with the
+  host CPU, fitting an I/O card in a larger machine.
+- **The link controller** has a message FIFO behind one register, indirect
+  registers and command codes: a dedicated network or serial-link chip. Its
+  register map is the strongest fingerprint for identifying the equipment.
+
+### What this means on the dumping breadboard
+
+On the LED-sign breadboard, all external data space is the SRAM, so these
+"peripheral" accesses would simply land in RAM. That is why the dump works:
+the dumper uses `MOVX` writes to copy the ROM into SRAM. It also means the
+OKI firmware cannot do its real job on that board: the channel/host chips
+and the link controller would have to be emulated. By contrast, the
+Signetics SCN8031H program (`scn8031/`) uses no `MOVX` at all; everything it
+controls is wired to its port pins.
+
+The three interfaces in detail:
 
 ### 1. Host mailbox (FFF8h–FFFFh)
 

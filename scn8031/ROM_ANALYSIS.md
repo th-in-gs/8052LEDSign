@@ -64,6 +64,7 @@ captures are identical, byte for byte. The code also disassembles cleanly
 | Timer 1 | 001Bh → 0185h |
 | Serial | 0023h → 067Eh |
 | External memory | None (no `MOVX`) |
+| External peripherals | None: everything it controls (motors, sensors, serial) is wired to its port pins. Unlike the OKI firmware, it needs no missing chips to run. |
 | ASCII strings | None |
 | Unused | 0FFAh–0FFEh (FFh), 0FFFh = 00h |
 
