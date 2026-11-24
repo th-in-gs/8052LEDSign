@@ -17,8 +17,26 @@
 ENTRIES = [0x35A7, 0x05A4, 0x05E5, 0x05F1, 0x05EB, 0x062E] + \
           [0x1791 + 3 * i for i in range(35)]
 
+ROM = 'romdump.bin'
+OUTPUT = 'romdump_annotated.lst'
+
 JUMP_TABLE = 0x1791
 JUMP_TABLE_ENTRIES = 35
+HANDLER_NOTE = 'R7 = channel, R5 = command (0 if none).'
+
+# 'MOV B,#0Ch / MUL AB / ADD A,#80h': the per-channel 12-byte records.
+RECORD_BASE = 0x80
+RECORD_COMMENT = 'A = 80h + 12(n-1): channel n record'
+
+TABLE_COMMENTS = {
+    0x318E: 'A = channel mask (bit n-1)',
+    0x3196: 'A = ~channel mask',
+    0x31A7: 'A = curve table 31A7h',
+    0x32A7: 'A = curve table 32A7h',
+    0x33A7: 'A = curve table 33A7h',
+    0x34A7: 'A = curve table 34A7h',
+    0x3FFD: 'A = config byte',
+}
 
 # Per-channel arrays: base address (as used in MOV A,#base / ADD A,R7) -> name.
 CHANNEL_ARRAYS = {

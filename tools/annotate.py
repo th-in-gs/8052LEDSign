@@ -1,21 +1,62 @@
 #!/usr/bin/env python3
-# Produce an annotated disassembly of the ROM dump.
+# Produce an annotated disassembly of an 8051 ROM dump.
 #
 # Usage:
-#   python3 tools/annotate.py [romdump.bin] [output.lst]
+#   python3 tools/annotate.py [--annotations MODULE] [rom.bin] [output.lst]
 #
-# Uses the tracer in dis51.py, the names and comments in
-# romdump_annotations.py, and some automatic annotation of recognisable
-# patterns: external and link controller register accesses, per-channel
-# array pointers, channel mask lookups and state assignments.
+# MODULE is an annotation module in this directory (default:
+# romdump_annotations, for the OKI MSM83C154 dump). It supplies names,
+# comments and data layouts, plus the ROM and output paths used when they
+# are not given. Every field is optional; see DEFAULTS below.
+#
+# Besides the hand-written annotations, recognisable patterns are annotated
+# automatically when the module enables them: external and link controller
+# register accesses, per-channel array pointers, table lookups and state
+# assignments through a jump table.
 
+import importlib
 import os
 import re
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 import dis51                          # noqa: E402
-import romdump_annotations as A       # noqa: E402
+
+DEFAULTS = dict(
+    ROM=None,               # dump path, relative to the repository root
+    OUTPUT=None,            # listing path, relative to the repository root
+    ENTRIES=[],             # extra trace entry points
+    JUMP_TABLE=None,        # address of an LJMP table indexed by state value
+    JUMP_TABLE_ENTRIES=0,
+    HANDLER_NOTE='',        # appended to automatic state handler headers
+    CHANNEL_ARRAYS={},      # base (MOV A,#base / ADD A,R7) -> array name
+    EXT_READ={},            # MOVX @Ri address -> register name (reads)
+    EXT_WRITE={},           # ...and writes
+    LINK_REGS={},           # MOVX @DPTR with DPH = 00h: register -> name
+    LINK_COMMANDS={},
+    TABLE_COMMENTS={},      # MOVC A,@A+DPTR table address -> comment
+    RECORD_BASE=None,       # 'MUL AB / ADD A,#base' record pattern
+    RECORD_COMMENT='',
+    IRAM={},
+    BITS={},
+    LABELS={},
+    SUMMARY={},
+    BLOCKS={},
+    COMMENTS={},
+    DATA=[],
+)
+
+
+class Annotations:
+    def __init__(self, module):
+        self.module = module
+
+    def __getattr__(self, name):
+        return getattr(self.module, name, DEFAULTS[name])
+
+
+A = None   # set in main()
 
 COMMENT_COLUMN = 44
 
@@ -36,7 +77,7 @@ def rename_labels(text):
 
 def state_target(rom, state):
     """Handler address for a state value (a byte offset into the jump table)."""
-    if state % 3 or state // 3 >= A.JUMP_TABLE_ENTRIES:
+    if A.JUMP_TABLE is None or state % 3 or state // 3 >= A.JUMP_TABLE_ENTRIES:
         return None
     a = A.JUMP_TABLE + state
     if rom[a] != 0x02:
@@ -82,10 +123,11 @@ def auto_comment(rom, addr, text, t, facts):
     """Return an automatic comment for the instruction, updating tracker t."""
     c = None
     prev, t.prev = t.prev, text
-    if text == 'ADD A,#80h' and prev == 'MUL AB':
+    if (A.RECORD_BASE is not None and prev == 'MUL AB'
+            and text == f'ADD A,#{A.RECORD_BASE:02X}h'):
         t.A = None
         t.record = True
-        return 'A = 80h + 12(n-1): channel n record'
+        return A.RECORD_COMMENT
     m = re.match(r'ADD A,#([0-9A-F]{2})h$', text)
     if m and t.record:
         t.record = False
@@ -107,7 +149,7 @@ def auto_comment(rom, addr, text, t, facts):
     if text == 'CLR A':
         t.A = 0
         return None
-    if text == 'ADD A,R7' and isinstance(t.A, int):
+    if text == 'ADD A,R7' and isinstance(t.A, int) and A.CHANNEL_ARRAYS:
         t.A = ('chan', t.A)
         return 'A = n-1' if t.A[1] == 0xFF else f'A = {t.A[1]:02X}h+n'
     m = re.match(r'MOV R([01]),#([0-9A-F]{2})h$', text)
@@ -142,6 +184,10 @@ def auto_comment(rom, addr, text, t, facts):
 
     # External register accesses through @R0/@R1.
     m = re.match(r'MOVX (A,@R([01])|@R([01]),A)$', text)
+    if m and not (A.EXT_READ or A.EXT_WRITE):
+        if m.group(2) is not None:
+            t.A = None
+        return None
     if m:
         reading = m.group(2) is not None
         r = int(m.group(2) or m.group(3))
@@ -168,7 +214,7 @@ def auto_comment(rom, addr, text, t, facts):
 
     # Link controller accesses through DPTR.
     if text in ('MOVX @DPTR,A', 'MOVX A,@DPTR'):
-        reg = t.dptr_link_reg()
+        reg = t.dptr_link_reg() if A.LINK_REGS else None
         if reg is None:
             if text == 'MOVX A,@DPTR':
                 t.A = None
@@ -197,17 +243,7 @@ def auto_comment(rom, addr, text, t, facts):
     if text == 'MOVC A,@A+DPTR':
         tbl = t.DPTR_TABLE
         t.A = None
-        if tbl == 0x318E:
-            return 'A = channel mask (bit n-1)'
-        if tbl == 0x3196:
-            return 'A = ~channel mask'
-        if tbl in (0x31A7, 0x32A7, 0x33A7, 0x34A7):
-            return f'A = curve table {tbl:04X}h'
-        if tbl == 0x308F:
-            return 'A = bit-reversed'
-        if tbl == 0x3FFD:
-            return 'A = config byte'
-        return None
+        return A.TABLE_COMMENTS.get(tbl)
 
     # Per-channel array accesses through R0.
     m = re.match(r'MOV @R0,#([0-9A-F]{2})h$', text)
@@ -277,9 +313,17 @@ def data_lines(rom, start, end, kind, title):
 
 
 def main():
-    here = os.path.dirname(os.path.abspath(__file__))
-    rom_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, '..', 'romdump.bin')
-    out_path = sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, '..', 'romdump_annotated.lst')
+    global A
+    args = sys.argv[1:]
+    module = 'romdump_annotations'
+    if len(args) >= 2 and args[0] == '--annotations':
+        module, args = args[1], args[2:]
+    A = Annotations(importlib.import_module(module))
+    root = os.path.join(HERE, '..')
+    rom_path = args[0] if len(args) > 0 else (A.ROM and os.path.join(root, A.ROM))
+    out_path = args[1] if len(args) > 1 else (A.OUTPUT and os.path.join(root, A.OUTPUT))
+    if not rom_path or not out_path:
+        sys.exit('ROM and output paths are needed (or ROM/OUTPUT in the annotation module).')
     rom = open(rom_path, 'rb').read()
 
     dis51.IRAM_NAMES.update(A.IRAM)
@@ -331,7 +375,7 @@ def main():
                 header += block(A.BLOCKS[addr])
             if addr in handler_states and addr not in A.BLOCKS:
                 st = ', '.join(f'{s:02X}h' for s in handler_states[addr])
-                header += block(f'State handler for state {st}. R7 = channel, R5 = command (0 if none).')
+                header += block(f'State handler for state {st}.' + (f' {A.HANDLER_NOTE}' if A.HANDLER_NOTE else ''))
             if addr in handler_states or (addr in labels and 'call' in labels[addr]):
                 f = facts_by_routine.get(addr, {})
                 summary = []

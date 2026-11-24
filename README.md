@@ -8,6 +8,10 @@ The chips turned out to be preprogrammed. This repository contains the tooling
 used to read the ROM out, the dump itself, and an analysis of what the program
 does.
 
+A second set of chips from the same drawer, Signetics SCN8031Hs, is covered
+in `scn8031/`. They are marked as the ROMless 8031, but their 4 KB internal
+ROM holds a stepper motor controller program.
+
 It is a branch of my 8052 LED sign project, which provided the hardware: an
 8052 running from SRAM that an ATmega328 loads on its behalf. I'm documenting
 that project on my blog,
@@ -22,10 +26,13 @@ https://www.blog.montgomerie.net/tags/makerspace-mcu-series/.
 | `ROM_ANALYSIS.md` | What the program does. |
 | `romdump_annotated.lst` | Annotated disassembly. |
 | `tools/dis51.py` | Minimal recursive-descent 8051 disassembler used for the analysis. |
-| `tools/annotate.py`, `tools/romdump_annotations.py` | Generator and annotation data for the annotated disassembly. |
+| `tools/annotate.py` | Generator for the annotated disassemblies. `--annotations MODULE` picks the annotation data. |
+| `tools/romdump_annotations.py` | Annotation data for the OKI dump (the default). |
+| `scn8031/` | The SCN8031H dump, its analysis and annotated disassembly. |
+| `tools/scn8031_annotations.py` | Annotation data for the SCN8031H dump. |
 | `mcs51/src/romdump.c` | Dumper, run by the 8052. |
 | `avr_host/src/` | AVR host: loads the dumper, runs it, prints the dump over serial. |
-| `scripts/capture_romdump.py` | Captures the serial output into `romdump.bin`. |
+| `scripts/capture_romdump.py` | Captures the serial output into a `.bin` file (default `romdump.bin`). |
 | `hardware/` | KiCad schematic and PCB of the circuit. |
 | `docs/RAM:ROM Shadowing.txt` | Notes on the SRAM address decode the dumper relies on. |
 
