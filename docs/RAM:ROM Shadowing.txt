@@ -127,3 +127,63 @@ Or, back to PSEN and ROMWR:
 0 1 1 --> 1
 
 Then it's just AND(ORIG_A14, PSEN, ROMRW)
+
+__2026-11-23: PROBLEM WITH THE ABOVE, AND THE XOR FIX__
+
+The error is at "If we invert the memory spaces, it's literally just
+NAND(ORIG_A14, ~RD, ~WR)!". Removing the NOT inverts the gate's _input_, but
+swapping the memory spaces would mean inverting its _output_. With the input
+inverted, ROM reads give NOT A14 while RAM accesses are still forced to 1 - and
+1 is now what ROM 0x0000-0x3FFF gives. So, as built, 8052 RAM accesses hit the
+ROM image (code 0x0000-0x3FFF) and the 'shadow' half at code 0x4000-0x7FFF
+can't be reached as data at all (the AVR can still write it).
+
+The NAND version also has a write race: SRAM A14 follows ~WR through one gate,
+but WE follows it through two (7408 gates 4 and 3). At the _end_ of a write,
+SRAM A14 changes before WE goes high, so the byte can also land in the other
+half. (Today: only for data writes >= 0x4000. With a NOT on A14 added:
+every data write < 0x4000, and into the ROM half.)
+Same-delay-on-both-edges fixes can't work: the start of a write needs A14 to
+change before WE, the end needs it after.
+
+
+XOR version - one gate:
+
+SRAM A14 = XOR(ORIG_A14, ~PSEN)
+
+                        ~PSEN   SRAM A14
+8052 code fetch           0     A14       code 0x0000 -> lower half ('ROM')
+                                          code 0x4000 -> upper half ('RAM')
+8052 data read/write      1     !A14      data 0x0000-0x3FFF -> upper half
+                                          (same cells as code 0x4000-0x7FFF)
+AVR read/write            1     !A14      (8052 held in reset, ~PSEN high)
+
+- Data 0x4000-0x7FFF would hit the ROM half - just don't use it (RAM is 16K).
+- No write races: ~PSEN is stable across every data cycle and AVR access.
+  ~RD/~WR are no longer involved in the decode at all.
+- AVR sees memory as 8052 _data_ space: the ROM image must be written at AVR
+  address 0x4000 (loader + verify need an 0x4000 offset).
+- 74LS86 replaces the 7410: pin 1 = A14, pin 2 = ~PSEN, pin 3 -> SRAM A14.
+  (Can't build XOR from the 7410's spare gates - needs 4 NANDs.)
+
+Timing concern: SRAM A14 now flips on every PSEN edge, so every fetch waits
+for the XOR. 74LS86 ~30ns worst + 70ns SRAM = ~100ns after ~PSEN low.
+Intel 8051 tPLIV at 13.875MHz (3*TCLCL - 105) = ~111ns. ~10ns margin worst
+case, ~25ns typical. CHECK THE OKI DATASHEET'S tPLIV.
+
+
+Wired-AND to drop the 7408 (only valid with the XOR decode):
+
+8052 ~RD/~WR (P3.7/P3.6) are quasi-bidirectional (strong pull-down, weak
+pull-up), so they can share a wire with the AVR's strobes if the AVR acts
+open-drain (DDR=1/PORT=0 to assert, DDR=0 to release - NEVER drive high).
+
+- ~WR + AVR ~PREWR (PD4) wired together -> SRAM WE directly.
+- ~RD + AVR ~PRERD (PD5) wired together. OE = AND(~PSEN, ~RD) - one gate.
+- ~4.7K pull-ups on both shared lines (only weak 8052 pull-ups otherwise).
+- The 7408 delay gate on WE was only there for the NAND decode's A14
+  settling. With XOR, A14 is settled long before ~WR falls.
+- AVR host currently drives PD4/PD5 high while the 8052 runs - must change.
+- Check OKI datasheet confirms P3 is quasi-bidirectional.
+
+Total: one XOR gate + one AND gate.
