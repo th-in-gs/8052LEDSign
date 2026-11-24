@@ -19,12 +19,16 @@ CCA44  E
 |---|---|---|
 | `8450` | Date code: 1984, week 50. | Medium |
 | `SCN8031H` | Signetics 8031, HMOS: the ROMless 8051. | High |
-| `CCA44` | Ordering-code suffix. `A44` = 44-pin PLCC (the DIP version is `N40`). `CC` covers temperature range and speed grade, commonly 0–70 °C, 12 MHz. | Medium |
+| `CCA44` | Ordering-code suffix. `A44` = 44-pin PLCC (the DIP version is `N40`). `CC` = 0–70 °C, 12 MHz. | High |
 | `E` | Revision or lot letter. | Low |
 
 The program uses P0 and P2 as plain I/O and never accesses external memory,
-so it was written for an 8051 running from internal ROM. The chips were
-probably mask-ROM 8051s, surplus or rejected, remarked as 8031s.
+so it was written for an 8051 running from internal ROM. If the part were
+truly ROMless, raising EA would have read the external SRAM (the stub and
+RAM-test pattern), not a program. The ROM is valid and the program
+complete, so the die is functionally an 8051 (SCN8051H): surplus 8051 dies
+or a die/package mix-up, marked as 8031s. The top marking is not
+trustworthy.
 
 ## Files
 
@@ -38,9 +42,12 @@ probably mask-ROM 8051s, surplus or rejected, remarked as 8031s.
 
 With the same circuit and dumper as the OKI MSM83C154 (see the main
 `README.md`), in the same PLCC-44 adapter. The board's 13.875 MHz clock is
-above this part's likely 12 MHz rating, but the dump is coherent. On NMOS
-8051s, EA is generally sampled continuously rather than latched, which is the
-basis of the classic 8051 ROM dump.
+about 16% above this part's 12 MHz rating, but the dump is coherent. On
+NMOS 8051s, EA is generally sampled continuously rather than latched, which
+is the basis of the classic 8051 ROM dump. A precedent: the 8051dumper
+project dumped a Signetics SCN8051H from a Micropolis 1325 disk drive
+(DEC RD53-A) this way. That is a different product and program, but the same
+die family and EA behaviour.
 
 There is no checksum to verify against: the 8-bit sum is 09h and no checksum
 routine was found. Instead, the chip was dumped twice and the two 16 KB
@@ -102,17 +109,38 @@ the other.
   60h minus the difference. Shortest-path positioning on a wheel or carousel
   with 96 positions.
 - **Motor C: linear axis with tracked position.** A 16-bit position at
-  36h:37h, kept within 0000h–0C60h (0–3168 half-steps) by 0DF5h. A sweep
-  routine (06F4h) steps an index between 01h and 83h, reversing at each end,
-  moving motor C 18h (24) half-steps per index: 83h × 18h = 0C48h, just inside
-  the limit.
+  36h:37h, kept within 0000h–0C60h (0–3168 half-steps) by 0DF5h.
 - **Motor A: relative moves only.** Moves of up to 2047 half-steps with a
   direction bit; no position is tracked.
+
+### Automatic sequences
+
+0CFDh runs one of two automatic sequences, chosen by flag 20h.2:
+
+- **Sweep (20h.2 set, 06F4h).** Steps an index between 01h and 83h,
+  reversing at each end, moving motor C 18h (24) half-steps per index:
+  83h × 18h = 0C48h, just inside motor C's limit.
+- **Scripted carousel sequence (20h.2 clear, 0D05h–0D5Dh).** R6 counts down
+  from 30h (48) on each call while R7 counts up, and motor C moves 18h
+  half-steps per call, its direction flipping each cycle. When R6 runs out,
+  the carousel makes a fixed move depending on R7:
+
+  | R7 | Carousel move |
+  |---|---|
+  | 1 | 26h positions |
+  | 2 | 10h positions |
+  | 32h | 18h positions |
+  | anything else | 23h positions back the other way, and R7 resets to 0 |
+
+  R7 peaks at 52h (82). Its speed classes come from the table at 0FBEh (see
+  below). Whether this is homing, a self-test or a fixed presentation pattern
+  is open.
 
 ### Speed tables
 
 - **05C5h:** `C9 64 4A 3E 36 31 2C 29 27 24 …` (201, 100, 74, 62, 54 …). It
-  fits about 96/√n + 4. Step delays proportional to 1/√n give constant
+  fits about 96/√n + 4, apart from the first entry (C9h), which is an
+  outlier. Step delays proportional to 1/√n give constant
   acceleration, the classic stepper ramp. 05E3h, directly after it, holds a
   gentler ramp (`AC 7E 78 6D 64 …`). The code only references 05C5h (twice,
   with different parameters in B), so the second is presumably reached by
@@ -122,11 +150,12 @@ the other.
   a TH0 reload value and two parameters copied to bank 1 R2/R3. Flags 2Ah.0
   and 2Ah.1 (a 2-bit speed class) pick the entry. The same routine (01A6h)
   sets P3.5 high for the first entry and low otherwise.
-- **0FBEh: per-position speed classes for the sweep.** Packed 4 to a byte,
-  2 bits each. 0F9Fh indexes it by the sweep position (index ÷ 4 picks the
-  byte, index mod 4 the bit pair) and copies the result to 2Ah.0/2Ah.1. For
-  indexes above 99, the lookup runs past the 25-byte table into the code
-  that follows.
+- **0FBEh: carousel sequence speed classes.** Packed 4 to a byte, 2 bits
+  each, 100 entries. 0F9Fh indexes it by R7 in the scripted carousel
+  sequence (R7 ÷ 4 picks the byte, R7 mod 4 the bit pair) and copies the
+  result to 2Ah.0/2Ah.1. R7 never exceeds 52h there, so the lookup stays
+  inside the table (byte index at most 14h): the table is longer than
+  needed. The sweep at 06F4h does not use it.
 - **058Ah: three-segment period profile for motor C.** Index R5 starts at a
   per-move value (04h, 08h, 0Ch, 0Eh, or computed), increments after 12 steps
   and again with 7 steps remaining, so each move uses three consecutive
@@ -221,16 +250,22 @@ and code resumes at 0800h. The program appears to be laid out around the
 The firmware controls a 96-position circular axis, a linear axis that sweeps
 back and forth in fixed increments, and a third motor making relative moves,
 all commanded over a serial bus. Confidence in that much is moderate to good.
-Candidates for the product, all low confidence:
+Candidates for the product, most likely first, all low confidence:
 
-- **Laboratory autosampler or sample changer:** a 96-position carousel
-  (96 is the standard microplate well count, and a common carousel size), an
-  arm that moves along a linear axis, and a third motor for a needle,
-  probe or syringe.
-- **Filter wheel or turret with a scanning stage:** a wheel indexed to one of
-  96 positions plus a linear scan.
-- **A camera pan/tilt head:** less likely now. The 96-position wrap-around
-  axis would suit pan, but the sweep and third motor fit an instrument better.
+1. **HPLC/GC autosampler or sample injector.** The carousel selects one of 96
+   vials, the linear axis moves the needle between vial, injection and wash
+   positions, and the third motor drives the syringe or a probe. The
+   shift-register inputs would suit vial-present, needle-home, syringe-home
+   and door sensors, and the C1h actions homing, wash, purge or inject.
+   96-vial carousels are a standard autosampler layout.
+2. **Laboratory sample changer, e.g. a gamma counter carousel:** a 96-tube
+   carousel, an elevator, a pipettor.
+3. **Microplate handler:** possible, but a 96-position carousel suggests vials
+   or tubes more than a rectangular plate.
+4. **Filter wheel or turret with a scanning stage:** possible, but the third
+   motor and command set look more like a sample handler.
+5. **Camera pan/tilt head:** unlikely. The 96-position wrap-around axis is too
+   instrument-like.
 
 ## Relation to the OKI MSM83C154
 
@@ -243,15 +278,20 @@ No evidence that the two were used together:
 | Command values | 06h, 07h, 0Bh, 15h, 16h, 20h–23h | 00h–AFh (moves), C0h, C1h, D0h–DEh |
 | Function | Log-scale readings from 8 smart heads | Three motors: carousel, linear sweep, relative moves |
 
-None of the OKI's protocol values appear in this ROM. The two may share a
-source (the same donor or company) without being parts of one system. If the
-OKI board belongs to a photometric instrument and this one to an autosampler,
-they could be parts of one laboratory analyser, but nothing in either ROM
-links them, and their eras differ.
+None of the OKI's protocol values appear in this ROM. Functionally, though,
+the two are complementary: the OKI looks like a multi-channel measurement
+front end and this chip like a sample handler.
+
+A gamma counter is the best joint fit: 6-decade count rates, several
+detectors or energy windows, and a 96-tube carousel. An HPLC/GC autosampler
+is the best single-unit fit for the Signetics chip alone. The decade-wide
+era gap, different serial formats, and absence of cross-references keep the
+link speculative.
 
 ## Open questions
 
 - What the four C1h mechanism actions do, and what the shift-register inputs
   are connected to.
 - What the Timer 0 speed-setting parameters (bank 1 R2/R3) control.
+- What the scripted carousel sequence is for.
 - Whether 05E3h is a separate ramp reached by offset.
