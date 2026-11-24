@@ -41,7 +41,9 @@ env.Append(BUILDERS={"XxdBin": env.Builder(
 env['BUILDERS']['Object'].add_src_builder('XxdBin')
 
 build_dir = env.subst("$BUILD_DIR")
-mcs51_bin = os.path.abspath(f"{build_dir}/../mcs51/firmware.bin")
+# Which mcs51 environment's binary to include. Defaults to 'mcs51'.
+mcs51_env = env.GetProjectOption("custom_mcs51_env", "mcs51")
+mcs51_bin = os.path.abspath(f"{build_dir}/../{mcs51_env}/firmware.bin")
 local_bin = f"{build_dir}/xxd_gen/firmware.bin"
 
 # PlatformIO seems to not like files from other environments' build folders

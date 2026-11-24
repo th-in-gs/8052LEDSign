@@ -4,10 +4,19 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include <util/delay.h>
+
 #include "serial.h"
 
 extern const uint8_t firmware[] PROGMEM;
 extern const uint16_t firmware_len;
+
+// The 8052 firmware is the internal ROM dumper from mcs51/src. It's linked at
+// 0x4000 and needs a stub at 0x0000 to jump to it. The AVR also controls the
+// 8052's EA pin (on PD2) so that it can switch the internal ROM on after the
+// 8052 has started running from external memory.
+static const uint16_t FIRMWARE_LOAD_ADDRESS = 0x4000;
+static const uint16_t INTERNAL_ROM_SIZE = 0x4000;
 
 void power_off_unused_peripherals(void)
 {
@@ -130,7 +139,7 @@ int main(void)
     // So, we'll put bit 14 of the bus onto Port D (below).
     //
     // Control lines on Port D:
-    //  Port D bit    2: UNUSED
+    //  Port D bit    2: 8052 EA (External Access).
     //  Port D bit    3: Address Latch Enable (ALE).
     //  Port D bit    4: /WR write line.
     //  Port D bit    5: /RD READ line.
@@ -164,6 +173,11 @@ int main(void)
     // Bits 0 and 1 are the serial interface, so we leave them alone.
     PORTD = 0b11110000;
     DDRD  = 0b11111000;
+
+    // Drive the 8052's EA low, so that it starts up running from external
+    // memory.
+    PORTD &= ~(1 << 2);
+    DDRD |= (1 << 2);
 
 
     // RAM test
@@ -216,9 +230,25 @@ int main(void)
     }
 
 
+    // Stub at the 8052's reset vector: LJMP to the dumper.
+    {
+        static const uint8_t stub[] PROGMEM = {
+            0x02, (uint8_t)(FIRMWARE_LOAD_ADDRESS >> 8), (uint8_t)FIRMWARE_LOAD_ADDRESS
+        };
+        serialPrint("Writing reset stub (LJMP 0x", true);
+        serialPrintHex16(FIRMWARE_LOAD_ADDRESS, true);
+        serialPrint(")\n\n", true);
+        for(uint8_t i = 0; i < sizeof(stub); ++i) {
+            place_address_on_bus(i);
+            write_byte(pgm_read_byte(&stub[i]));
+        }
+    }
+
     serialPrint("Writing ");
     serialPrintDec(firmware_len);
-    serialPrint(" bytes to 'ROM'...", true);
+    serialPrint(" bytes to 'ROM' at 0x");
+    serialPrintHex16(FIRMWARE_LOAD_ADDRESS);
+    serialPrint("...", true);
 
     for(uint16_t i = 0; i < firmware_len; ++i) {
         if((i % 4) == 0) {
@@ -228,7 +258,7 @@ int main(void)
             serialPrint('\n');
         }
 
-        place_address_on_bus(i);
+        place_address_on_bus(FIRMWARE_LOAD_ADDRESS + i);
 
         uint8_t byte = pgm_read_byte(&firmware[i]);
 
@@ -253,7 +283,7 @@ int main(void)
                 serialPrint('\n');
             }
 
-            place_address_on_bus(i);
+            place_address_on_bus(FIRMWARE_LOAD_ADDRESS + i);
             uint8_t byte = read_byte();
 
             if(byte != pgm_read_byte(&firmware[i])) {
@@ -290,6 +320,9 @@ int main(void)
     PORTD = 0b01110000;
     DDRD = 0b01110000;
 
+    // Keep driving EA low.
+    DDRD |= (1 << 2);
+
     serialPrint("Letting 8052 take control.\n");
 
     // Okay, everything is stable and we are but an observer on the bus and
@@ -297,6 +330,49 @@ int main(void)
     PORTD &= ~(1 << 6);
 
     serialPrint("8052 reset released.\n\n", true);
+
+    // The 8052 is now running the stub, then the dumper at 0x4000, from
+    // external memory. Raise EA to switch on its internal ROM. Code at 0x4000
+    // and above is still fetched externally.
+    _delay_ms(10);
+    PORTD |= (1 << 2);
+    serialPrint("EA raised. Waiting for dump...\n", true);
+
+    // The dumper waits ~200ms then takes ~150ms to copy 16K. Give it plenty
+    // of time.
+    _delay_ms(2000);
+
+    // Put the 8052 back into reset so that it lets go of the bus, then take
+    // control of it again.
+    PORTD |= (1 << 6);
+    _delay_ms(1);
+
+    PORTC = 0b00111111;
+    DDRC  = 0b00111111;
+    PORTD = 0b11110100;     // EA (bit 2) stays high; it doesn't matter in reset.
+    DDRD  = 0b11111100;
+
+    serialPrint("8052 back in reset. Reading dump.\n\n", true);
+
+    // The dumper copied code 0x0000-0x3FFF to data 0x0000-0x3FFF. With the
+    // current decode, that's the same SRAM cells the AVR sees at
+    // 0x0000-0x3FFF.
+    //
+    // If EA was latched at reset (or the ROM is protected), the dumper will
+    // have copied the external memory onto itself instead: expect the stub
+    // (02 40 00) at the start, then the RAM test's last pattern.
+    serialPrint("ROMDUMP BEGIN\n", true);
+    for(uint16_t address = 0; address < INTERNAL_ROM_SIZE; address += 16) {
+        serialPrintHex16(address, true);
+        serialPrint(':', true);
+        for(uint8_t i = 0; i < 16; ++i) {
+            place_address_on_bus(address + i);
+            serialPrint(' ', true);
+            serialPrintHex(read_byte(), true);
+        }
+        serialPrint('\n', true);
+    }
+    serialPrint("ROMDUMP END\n", true);
 
     // Keep draining the serial output buffer.
     while(true) {

@@ -29,6 +29,9 @@ env.Depends("upload", bin_node)
 
 # Set the upload to happen (via the avr-host target) after the 'upload' target
 # is built.
+# Which AVR host environment to upload. Defaults to 'avr_host'.
+avr_env = env.GetProjectOption("custom_avr_env", "avr_host")
+
 def upload_avr(source, target, env):
     # Invoke the avr_host upload in a separate PIO invocation. By default
     # PlatformIO will auto-clean build directories for other environments
@@ -37,7 +40,7 @@ def upload_avr(source, target, env):
     # copy it, leading to a FileNotFoundError on every other run. We disable
     # the auto-clean to keep the mcs51 artifacts intact.
     subprocess.check_call([
-        "pio", "run", "-e", "avr_host", "-t", "upload",
+        "pio", "run", "-e", avr_env, "-t", "upload",
         "--disable-auto-clean",
     ])
 env.AddPostAction("upload", upload_avr)
