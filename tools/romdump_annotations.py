@@ -293,9 +293,9 @@ Host channel command (HOST_CHCMD). Bits 0-2: channel - 1.
 Configure channel R7. Only in states 4Eh-5Dh, otherwise a protocol error.
 Sends 27 MSG_FLAGS, then reads the mode byte at WIN_E0 (bits 0-2) and sends
 one of six message pairs: 03/43, 0B/4B, 13/53, 18/58, 23/63, 2B/6B. The
-first carries the window block (WIN_E1..E8), checked against the checksum
-at WIN_E9. The second reads the block back, and the reply must match the
-same checksum. Success moves the channel to the next state.""",
+first carries the window block, WIN_E1..E8 checked against the checksum at
+WIN_E9 (type 3, 18h: WIN_E1..E4 and the checksum at WIN_E5). The second
+reads the block back, and the reply must match the same checksum. Success moves the channel to the next state.""",
 
 0x0584: """\
 Prepare the link for a new message: command 04h, then wait for STATUS bit 4.
@@ -335,8 +335,8 @@ restored. Then byte 00h.""",
 0x08BC: """\
 Link controller setup. Pulse P3.3 to reset it, then write its indirect
 registers: config C2h=28h, C4h=37h, table 80h-87h = 81h-88h,
-table A0h-A7h = 97h, 80h-86h, C3h=01h. Every value is read back. Any
-mismatch goes to link_error.""",
+table A0h-A7h = 97h, 80h-86h, C3h=01h. Everything except C4h is read
+back. Any mismatch goes to link_error.""",
 
 0x0BC2: """\
 Per-channel handshake. For each channel, an indirect write 10h+n-1 = C0h.
@@ -348,10 +348,12 @@ invalid) to 30h+n-1.""",
 Send channel R7's two readings. Message: 30, then two bytes for the reading
 at WIN_E1+2(n-1), then two for WIN_E0+2(n-1), to destination 30h+n-1.
 Each reading is 7 bits + odd parity, looked up in the conversion curve.
-R5 bit 0 picks the range for the first, bit 1 for the second. A parity error
-sends 11 2B instead.
-The curve is logarithmic, 60 entries per decade, giving decimal floating
-point: byte 0's low nibble is the exponent, the other 3 nibbles the mantissa.""",
+R5 bit 0 picks the range for the first, bit 1 for the second.
+Parity error on the first reading: 30 11 2B 11 2B (5 bytes). On the second,
+the first value is already in the FIFO and 11 2B 11 2B is appended, giving a
+7-byte message (suspected bug, at 1005h).
+Curve values: byte 0's low nibble is a decimal exponent, 60 entries per
+decade. The other 3 nibbles are a mantissa whose encoding is unresolved.""",
 
 0x10E8: """\
 Reset entry. Clear REG_FC and CH_TOGGLE, set the stack, initialise, read the
@@ -393,13 +395,21 @@ state = 3 x entry. R7 = channel, R5 = command byte (0 if none).""",
 Handler for states 4Eh, 51h, 54h, 57h, 5Ah, 5Dh (channel not yet running).
 Command 07h restarts the handshake.""",
 
+0x2E34: """\
+Fill channel n's 12-byte record at 80h + 12(n-1) from the window block:
+  +0 type (WIN_E0 bits 6-4)   +1 WIN_E0 bits 3-0   +2..+7 WIN_E1..E6
+  +8 WIN_E7 bits 5-4          +9 WIN_E8 bits 7-6   +A WIN_E8 bits 5-4
+  +B WIN_E9
+Bit fields are shifted down to the low bits.""",
+
 0x35A7: """\
 Debug monitor. Enter: host writes FCh to HOST_DBGCMD, we answer FCh.
 Exit: FAh. In debug mode:
   8xh = write, Axh = read. Bits 0-3: iRAM, XRAM (@R0), link register,
   port (address < 2: P1, = 2: P2, > 2: P3).
 Address from HOST_DBGADDR, data from HOST_DATA, reply on HOST_REPLY.
-Address and data are echoed to ACK_E4/ACK_E5.""",
+Address and data are echoed to ACK_E4/ACK_E5. SFRs other than the ports,
+and program memory, are not reachable.""",
 }
 
 # Line comments.
@@ -407,7 +417,8 @@ COMMENTS = {
     0x2C60: 'BUG? writes bank 0 register R(n-1); 0788h uses code[n] here',
     0x000B: 'unused vectors: NOPs fall through to TIMER1',
     0x0F8E: 'R1 -> WIN_E1 + 2(n-1)',
-    0x0F94: 'parity error: send 11 2B 11 2B',
+    0x0F94: 'parity error: append 11 2B 11 2B',
+    0x1005: 'BUG? first value already sent: message becomes 7 bytes',
     0x0FBB: 'strip parity, x2 for 2-byte entries',
     0x0FFF: 'R1 -> WIN_E0 + 2(n-1)',
     0x005B: 'R1 -> CHn_CMD',
@@ -446,7 +457,7 @@ DATA = [
     (0x001E, 0x0023, 'bytes', 'Padding'),
     (0x002E, 0x0030, 'bytes', 'Padding'),
     (0x0F70, 0x0F7C, 'bytes', 'Unreached code fragment'),
-    (0x308F, 0x318E, 'bytes', 'Bit-reverse table: byte i holds i with its bits reversed'),
+    (0x308F, 0x318E, 'bytes', 'Bit-reverse table: byte i holds i with its bits reversed (unreferenced)'),
     (0x318E, 0x3196, 'bytes', 'Channel masks: index n -> bit n-1 (index 0: FFh).\nIndex 8 (80h) is the first byte of the next table.'),
     (0x3196, 0x319F, 'bytes', 'Inverted channel masks: index n -> ~(bit n-1) (index 0: 80h)'),
     (0x319F, 0x31A7, 'bytes', 'Unreferenced'),

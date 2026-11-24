@@ -302,9 +302,9 @@ L0174:                  ; from 0154
 ; Configure channel R7. Only in states 4Eh-5Dh, otherwise a protocol error.
 ; Sends 27 MSG_FLAGS, then reads the mode byte at WIN_E0 (bits 0-2) and sends
 ; one of six message pairs: 03/43, 0B/4B, 13/53, 18/58, 23/63, 2B/6B. The
-; first carries the window block (WIN_E1..E8), checked against the checksum
-; at WIN_E9. The second reads the block back, and the reply must match the
-; same checksum. Success moves the channel to the next state.
+; first carries the window block, WIN_E1..E8 checked against the checksum at
+; WIN_E9 (type 3, 18h: WIN_E1..E4 and the checksum at WIN_E5). The second
+; reads the block back, and the reply must match the same checksum. Success moves the channel to the next state.
 ;   Sets state: 0Fh, 4Eh, 51h, 54h, 57h, 5Ah, 5Dh
 ;   Calls: link_prepare, send_window_block, check_window_checksum, receive_and_checksum
 channel_configure:      ; from 0139 015B 2D98
@@ -1506,8 +1506,8 @@ L08BB:                  ; from 08B4
 
 ; Link controller setup. Pulse P3.3 to reset it, then write its indirect
 ; registers: config C2h=28h, C4h=37h, table 80h-87h = 81h-88h,
-; table A0h-A7h = 97h, 80h-86h, C3h=01h. Every value is read back. Any
-; mismatch goes to link_error.
+; table A0h-A7h = 97h, 80h-86h, C3h=01h. Everything except C4h is read
+; back. Any mismatch goes to link_error.
 link_init:              ; from 06BC 08A4 08AE
   08BC  79 E3      MOV R1,#E3h
   08BE  F3         MOVX @R1,A                ; WATCHDOG <- A
@@ -2369,10 +2369,12 @@ L0F6B:                  ; from 0F61 0F65 0F69 0F6D
 ; Send channel R7's two readings. Message: 30, then two bytes for the reading
 ; at WIN_E1+2(n-1), then two for WIN_E0+2(n-1), to destination 30h+n-1.
 ; Each reading is 7 bits + odd parity, looked up in the conversion curve.
-; R5 bit 0 picks the range for the first, bit 1 for the second. A parity error
-; sends 11 2B instead.
-; The curve is logarithmic, 60 entries per decade, giving decimal floating
-; point: byte 0's low nibble is the exponent, the other 3 nibbles the mantissa.
+; R5 bit 0 picks the range for the first, bit 1 for the second.
+; Parity error on the first reading: 30 11 2B 11 2B (5 bytes). On the second,
+; the first value is already in the FIFO and 11 2B 11 2B is appended, giving a
+; 7-byte message (suspected bug, at 1005h).
+; Curve values: byte 0's low nibble is a decimal exponent, 60 entries per
+; decade. The other 3 nibbles are a mantissa whose encoding is unresolved.
 ;   Calls: link_prepare
 send_readings:          ; from 00E9 1693 171B
   0F7C  12 05 84   LCALL link_prepare        ; prepare link for a new message
@@ -2391,7 +2393,7 @@ send_readings:          ; from 00E9 1693 171B
   0F91  20 D0 27   JB P,L0FBB                ; parity odd?
 
 L0F94:                  ; from 1005
-  0F94  74 11      MOV A,#11h                ; parity error: send 11 2B 11 2B
+  0F94  74 11      MOV A,#11h                ; parity error: append 11 2B 11 2B
   0F96  75 83 00   MOV DPH,#00h
   0F99  75 82 08   MOV DPL,#08h
   0F9C  F0         MOVX @DPTR,A              ; LINK_FIFO <- 11h
@@ -2456,7 +2458,7 @@ L0FF9:                  ; from 0FDD
   1000  E3         MOVX A,@R1
   1001  E3         MOVX A,@R1
   1002  20 D0 03   JB P,L1008                ; parity odd?
-  1005  02 0F 94   LJMP L0F94
+  1005  02 0F 94   LJMP L0F94                ; BUG? first value already sent: message becomes 7 bytes
 
 L1008:                  ; from 1002
   1008  C2 E7      CLR ACC.7
@@ -7789,6 +7791,11 @@ L2E31:                  ; from 2E2C
   2E31  74 00      MOV A,#00h
   2E33  22         RET
 
+; Fill channel n's 12-byte record at 80h + 12(n-1) from the window block:
+;   +0 type (WIN_E0 bits 6-4)   +1 WIN_E0 bits 3-0   +2..+7 WIN_E1..E6
+;   +8 WIN_E7 bits 5-4          +9 WIN_E8 bits 7-6   +A WIN_E8 bits 5-4
+;   +B WIN_E9
+; Bit fields are shifted down to the low bits.
 L2E34:                  ; from 2E2A 2E2F
   2E34  EF         MOV A,R7
   2E35  14         DEC A
@@ -8177,7 +8184,7 @@ send_06_c:              ; from 1823 1852 1885 1897 18CE 195A
   308D  F0         MOVX @DPTR,A              ; LINK_CMD <- 01h: SEND
   308E  22         RET
 
-; Bit-reverse table: byte i holds i with its bits reversed
+; Bit-reverse table: byte i holds i with its bits reversed (unreferenced)
   308F  DB 00h, 80h, 40h, C0h, 20h, A0h, 60h, E0h, 10h, 90h, 50h, D0h, 30h, B0h, 70h, F0h
   309F  DB 08h, 88h, 48h, C8h, 28h, A8h, 68h, E8h, 18h, 98h, 58h, D8h, 38h, B8h, 78h, F8h
   30AF  DB 04h, 84h, 44h, C4h, 24h, A4h, 64h, E4h, 14h, 94h, 54h, D4h, 34h, B4h, 74h, F4h
@@ -8346,7 +8353,8 @@ send_06_c:              ; from 1823 1852 1885 1897 18CE 195A
 ;   8xh = write, Axh = read. Bits 0-3: iRAM, XRAM (@R0), link register,
 ;   port (address < 2: P1, = 2: P2, > 2: P3).
 ; Address from HOST_DBGADDR, data from HOST_DATA, reply on HOST_REPLY.
-; Address and data are echoed to ACK_E4/ACK_E5.
+; Address and data are echoed to ACK_E4/ACK_E5. SFRs other than the ports,
+; and program memory, are not reachable.
 debug_monitor:          ; from 00D4
   35A7  79 DF      MOV R1,#DFh
   35A9  E3         MOVX A,@R1                ; A <- HOST_STATUS
