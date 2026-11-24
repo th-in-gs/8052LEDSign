@@ -60,40 +60,81 @@ captures are identical, byte for byte. The code also disassembles cleanly
 | ASCII strings | None |
 | Unused | 0FFAh–0FFEh (FFh), 0FFFh = 00h |
 
-## What it appears to do: a stepper motor controller on a serial bus
+## What it appears to do: a three-motor positioning controller on a serial bus
 
-### Stepper outputs
+### Motors and phase outputs
 
-Three 4-bit coil-phase outputs, each written through a shadow copy so the
-other half of the port is kept:
+Three motor outputs, each written through a shadow copy so the other half of
+the port is kept. The outputs idle high, so coils appear to be driven
+active-low.
 
-| Output | Phase variable | Written by | Driven from |
-|---|---|---|---|
-| P0 bits 0–3 | 43h | 02EEh | Timer 0 |
-| P0 bits 4–7 | 41h | 03A1h | Timer 0 |
-| P1 bits 0–3 | R1 (bank 2) | 0443h | Timer 1 |
+| Motor | Output | Phase variable | Next-pattern table | Driven from | Type |
+|---|---|---|---|---|---|
+| A | P0 bits 4–7 | 43h | 04CCh | Timer 0 | 4-wire, half-step |
+| B | P0 bits 0–2 (bit 3 held high) | 41h | 039Ah | Timer 0 | 3-phase, 6-step |
+| C | P1 bits 0–3 | R1 (bank 2) | 04CCh | Timer 1 | 4-wire, half-step |
 
-Timer 0 steps either the P0 low or the P0 high motor, whichever is moving,
-so at most two motors move at once. Each step rotates a 4-bit pattern
-(04CBh) in the current direction.
+Timer 0 steps either motor A or motor B, whichever is moving, so at most two
+motors move at once.
 
-### Acceleration ramps
+**Next-pattern tables.** Each step looks up the current pattern; the high
+nibble of the entry is the next pattern in one direction, the low nibble in
+the other.
 
-Both timers run in 16-bit mode, reloaded from tables:
+- 04CCh (motors A and C): starting from Eh, one direction cycles
+  E→6→7→5→D→9→B→A→E. Inverted (active-low), that is 1, 9, 8, A, 2, 6, 4, 5:
+  a classic 8-state half-step sequence. Invalid patterns (F, C, 8, 1 …) lead
+  into the cycle within a couple of steps.
+- 039Ah (motor B): uses 3 bits and forces bit 3 high. One direction cycles
+  1→3→2→6→4→5→1 (001, 011, 010, 110, 100, 101): 6-step 3-phase
+  commutation, for example a 3-phase variable-reluctance stepper. Invalid
+  values 0 and 7 recover.
+- Both tables overlap code to save space: entries 0–4 and F of 04CCh are the
+  bytes of the instructions at 04CCh–04D0h and 04DBh, and entries 0 and 7 of
+  039Ah are the `RET` at 039Ah and the first byte at 03A1h. Those entries
+  are the invalid patterns, and they still lead back into the cycle.
 
-- 05C5h: `C9 64 4A 3E 36 31 2C 29 27 24 …` (201, 100, 74, 62, 54 …). It fits
-  about 96/√n + 4: n=1 gives 100, n=4 gives 52, n=9 gives 36, n=16 gives 28.
-  Step delays proportional to 1/√n give constant acceleration, the classic
-  stepper ramp.
-- 05E3h: `AC 7E 78 6D 64 5D …`: a gentler ramp, directly after the first.
-  The code only references 05C5h (twice, with different parameters in B),
-  so the second ramp is presumably reached by offset; not verified.
-- 057Dh: a 13-entry ramp, `98 3F 31 24 … 14`.
-- 058Ah: a short ramp followed by a repeating `1C 12 0B` pattern; purpose
-  unclear.
+### What each motor does
 
-A sweep routine (06F4h) steps a position index between 01h and 83h,
-reversing at each end: a back-and-forth scanning motion.
+- **Motor B: 96-position circular axis.** A target from 01h to 60h is
+  checked at 0F77h. The firmware takes the difference from the current
+  position (35h); if it is more than 30h (48) it goes the other way round,
+  60h minus the difference. Shortest-path positioning on a wheel or carousel
+  with 96 positions.
+- **Motor C: linear axis with tracked position.** A 16-bit position at
+  36h:37h, kept within 0000h–0C60h (0–3168 half-steps) by 0DF5h. A sweep
+  routine (06F4h) steps an index between 01h and 83h, reversing at each end,
+  moving motor C 18h (24) half-steps per index: 83h × 18h = 0C48h, just inside
+  the limit.
+- **Motor A: relative moves only.** Moves of up to 2047 half-steps with a
+  direction bit; no position is tracked.
+
+### Speed tables
+
+- **05C5h:** `C9 64 4A 3E 36 31 2C 29 27 24 …` (201, 100, 74, 62, 54 …). It
+  fits about 96/√n + 4. Step delays proportional to 1/√n give constant
+  acceleration, the classic stepper ramp. 05E3h, directly after it, holds a
+  gentler ramp (`AC 7E 78 6D 64 …`). The code only references 05C5h (twice,
+  with different parameters in B), so the second is presumably reached by
+  offset; not verified.
+- **057Dh:** a 13-entry ramp, `98 3F 31 24 … 14` (used by 031Ah).
+- **01DFh–01E7h: three speed settings for Timer 0.** Three 3-byte entries:
+  a TH0 reload value and two parameters copied to bank 1 R2/R3. Flags 2Ah.0
+  and 2Ah.1 (a 2-bit speed class) pick the entry. The same routine (01A6h)
+  sets P3.5 high for the first entry and low otherwise.
+- **0FBEh: per-position speed classes for the sweep.** Packed 4 to a byte,
+  2 bits each. 0F9Fh indexes it by the sweep position (index ÷ 4 picks the
+  byte, index mod 4 the bit pair) and copies the result to 2Ah.0/2Ah.1. For
+  indexes above 99, the lookup runs past the 25-byte table into the code
+  that follows.
+- **058Ah: three-segment period profile for motor C.** Index R5 starts at a
+  per-move value (04h, 08h, 0Ch, 0Eh, or computed), increments after 12 steps
+  and again with 7 steps remaining, so each move uses three consecutive
+  entries, for example `1C 12 0B` from 0Eh or `32 2A 24` from 04h. The entry,
+  multiplied by B0h or 40h (flag 2Eh.2), is subtracted from the running
+  Timer 1 count, lengthening the step period. R5 = 39h selects 00h (no
+  adjustment) and 3Ah selects B7h. The long run of repeating `1C 12 0B`
+  beyond the used indexes looks like filler.
 
 ### Inputs
 
@@ -101,15 +142,21 @@ reversing at each end: a back-and-forth scanning motion.
   or limit switch.
 - P2.5 is polled in several places.
 - An external parallel-in shift register (e.g. a 74x165) is read at 098Ah:
-  P2.0 = load, P2.1 = clock, P2.2 = data, 8 bits. Switches or sensors.
-- P2.3 is read once at start-up (0F15h) to choose the warm-start marker.
+  P2.0 = load, P2.1 = clock, P2.2 = data, 8 bits, MSB first. The routine
+  returns bit 0 in the carry, copies bit 7 to flag 2Ch.5, and returns bits
+  1–6 inverted (so they are active-low inputs) with bits 0 and 7 cleared.
+  Callers test the carry and whether any of bits 1–6 is active; waits
+  (0ED7h) can be cut short by bits 5 or 6. What each input is connected to
+  isn't recoverable from the code.
+- P2.3 is read once at every reset (0F15h): OPTION_P23 (3Bh) = A5h if it
+  reads high, A0h if low. An option jumper or presence line. Some C1h
+  actions are refused without it, and the host can read it with `DE 00`.
 
 ### Other outputs
 
 - P3.7 (the RD pin) and P3.6 (the WR pin, inverted) carry status from the
   main loop.
-- P3.5 (T1 pin) is set or cleared by timer1_setup (01A6h), along with one of
-  three 3-byte entries at 01DFh–01E7h: perhaps a direction or mode line.
+- P3.5 (T1 pin): set or cleared with the Timer 0 speed setting (above).
 - P2.3, P2.4, P2.6 and P2.7 are also driven.
 
 ### Serial link
@@ -118,36 +165,72 @@ reversing at each end: a back-and-forth scanning motion.
   with selectable sense (21h.2), checked on receive.
 - Timer 1 auto-reload, TH1 = FDh: 9600 baud if the original crystal was
   11.0592 MHz.
-- Frames are 2 bytes. The first goes into bank 1 R7, the second into R6.
+- Frames are 2 bytes. The serial interrupt writes them to direct addresses
+  07h and 06h: R7 and R6 of register bank 0, the main loop's registers.
 - At start-up only frames starting C0h are accepted. `C0 80` or `C0 C0` sets
   the parity sense from bit 6, replies, and puts the node into echo mode: the
   next 8 bytes are sent straight back out with the same 9th bit. After that
   the node accepts all frames.
-- Most command values are in C0h–DFh (C0, C1, D0, D1, D2, D4, D8, DE), with
-  some 60h/61h.
+- Every frame gets a 1-byte reply: normally the status byte at 29h, or the
+  value requested by a read command.
 
 This looks like a node on a chain or multidrop bus, with a start-up sequence
 in which each node echoes traffic before going live.
 
+### Commands
+
+Decoded at 0D5Eh and 0B05h. First byte (R7), second byte (R6):
+
+| First byte | Second byte | Action |
+|---|---|---|
+| 00h–7Fh | bit 7: speed bit; bits 0–6: motor B target | Combined move: motor B to position R6 (1–60h, shortest path), and motor C by (R7 bits 0–4) × 2 half-steps, direction R7 bit 6. R7 bit 5 and R6 bit 7 form the speed class. |
+| 80h–8Fh | count low | Motor A: move ((R7 bits 0–2) × 256 + R6) half-steps, direction R7 bit 3. |
+| 90h–9Fh | count low (bit 0 ignored) | Motor C: move by ((R7 bits 0–2) × 256 + R6) half-steps, direction R7 bit 3, within the 0–0C60h limit. |
+| A0h–AFh | bits 0–6: motor B target | Motor B to position R6 (1–60h), speed class R7 bits 0–1. |
+| B0h–BFh | | Rejected. |
+| C0h | 00h | No action (status reply). |
+| C0h | 80h or C0h | Enter echo mode (start-up sequence; see above). |
+| C0h | 01h | Re-initialise: clear RAM and accept all frames. |
+| C0h | 02h | Leave read mode. |
+| C1h | 40h | Enter read mode. |
+| C1h | 20h, 10h, 08h, 04h | Mechanism actions (01F4h, 0AE7h, 0E9Dh, 0E46h); rejected while busy or in read mode. 08h and 04h are refused if P2.3 read low at reset (3Bh = A0h). |
+| D0h, D1h, D2h, D4h, D8h, DEh | 00h | In read mode: reply with the byte at 30h, 31h, 32h, 33h, 34h or 3Bh (3Bh is the P2.3 option byte). Outside read mode these go to 0A93h, not decoded. |
+| anything else | | Rejected: error flags set. |
+
+Moves are refused while another is in progress. The meaning of the four C1h
+actions isn't clear from the code; 0AE7h sends motor B to position 1, and
+the others involve the shift-register inputs, so they may be homing or
+calibration routines.
+
 ### Start-up and self-test
 
 - Reset clears iRAM 08h–42h, keeping a few flags.
-- WARM_MARK (3Bh) = A5h marks a warm start.
 - TXD is toggled and RXD watched. If they follow each other (a loopback plug),
   the firmware measures an INT0 pulse with Timer 0, sends AAh, 00h, FEh and
   55h, checks each comes back, then stops. That looks like a factory test
   mode.
 
+### Memory layout
+
+Code runs from 0000h to 07BAh, then 07BBh–07FFh is unprogrammed (all FFh),
+and code resumes at 0800h. The program appears to be laid out around the
+8051's 2 KB `AJMP`/`ACALL` pages. 0FFAh–0FFEh is FFh and 0FFFh is 00h.
+
 ## Possible applications
 
-Confidence is moderate on "stepper motor controller node on a serial bus" and
-low on the specific product. Candidates:
+The firmware controls a 96-position circular axis, a linear axis that sweeps
+back and forth in fixed increments, and a third motor making relative moves,
+all commanded over a serial bus. Confidence in that much is moderate to good.
+Candidates for the product, all low confidence:
 
-- A camera pan/tilt head: two axes, home sensors, daisy-chained serial
-  control.
-- A scanning mechanism: the back-and-forth sweep routine.
-- A small XY positioner or plotter axis pair.
-- Reel or mechanism drives in vending or gaming machines.
+- **Laboratory autosampler or sample changer:** a 96-position carousel
+  (96 is the standard microplate well count, and a common carousel size), an
+  arm that moves along a linear axis, and a third motor for a needle,
+  probe or syringe.
+- **Filter wheel or turret with a scanning stage:** a wheel indexed to one of
+  96 positions plus a linear scan.
+- **A camera pan/tilt head:** less likely now. The 96-position wrap-around
+  axis would suit pan, but the sweep and third motor fit an instrument better.
 
 ## Relation to the OKI MSM83C154
 
@@ -157,20 +240,18 @@ No evidence that the two were used together:
 |---|---|---|
 | Date | 1985 or later, probably 1994 | 1984 |
 | Serial format | 7 data bits + odd parity per channel byte | 8 data bits + parity in the 9th bit |
-| Command values | 06h, 07h, 0Bh, 15h, 16h, 20h–23h | Mostly C0h–DFh, 60h/61h |
-| Function | Log-scale readings from 8 smart heads | Stepper motors with ramps and home sensors |
+| Command values | 06h, 07h, 0Bh, 15h, 16h, 20h–23h | 00h–AFh (moves), C0h, C1h, D0h–DEh |
+| Function | Log-scale readings from 8 smart heads | Three motors: carousel, linear sweep, relative moves |
 
 None of the OKI's protocol values appear in this ROM. The two may share a
-source (the same donor or company) without being parts of one system. The
-only way they could belong together is as separate subsystems of one
-instrument, for example a motor-driven filter wheel or stage beside a
-log-range detector, and nothing in either ROM supports that beyond
-plausibility.
+source (the same donor or company) without being parts of one system. If the
+OKI board belongs to a photometric instrument and this one to an autosampler,
+they could be parts of one laboratory analyser, but nothing in either ROM
+links them, and their eras differ.
 
 ## Open questions
 
-- What the 01DFh, 039Bh, 058Ah and 0FBEh tables encode.
-- The 69 bytes at 07BBh–07FFh not reached by the trace: dead code, or reached
-  by a computed jump.
-- The meaning of the command values, and of the bits read from the shift
-  register.
+- What the four C1h mechanism actions do, and what the shift-register inputs
+  are connected to.
+- What the Timer 0 speed-setting parameters (bank 1 R2/R3) control.
+- Whether 05E3h is a separate ramp reached by offset.

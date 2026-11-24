@@ -83,11 +83,11 @@ L0050:                  ; from 0045
 
 motion_init:            ; from 086C
   0064  75 2A 00   MOV 2Ah,#00h
-  0067  75 10 00   MOV 10h,#00h
+  0067  75 10 00   MOV B_STEPS,#00h
   006A  75 17 32   MOV 17h,#32h
   006D  75 16 00   MOV 16h,#00h
   0070  11 AE      ACALL L00AE
-  0072  D2 56      SETB 2Ah.6
+  0072  D2 56      SETB C_DIR
   0074  75 17 98   MOV 17h,#98h
   0077  75 16 0D   MOV 16h,#0Dh
   007A  D2 60      SETB 2Ch.0
@@ -98,16 +98,16 @@ motion_init:            ; from 086C
   0086  D2 62      SETB 2Ch.2
 
 L0088:                  ; from 0093
-  0088  75 10 01   MOV 10h,#01h
+  0088  75 10 01   MOV B_STEPS,#01h
   008B  75 17 00   MOV 17h,#00h
   008E  75 16 00   MOV 16h,#00h
   0091  11 AE      ACALL L00AE
   0093  D5 18 F2   DJNZ 18h,L0088
 
 L0096:                  ; from 00A0 00A3
-  0096  C2 56      CLR 2Ah.6
+  0096  C2 56      CLR C_DIR
   0098  75 17 02   MOV 17h,#02h
-  009B  75 10 00   MOV 10h,#00h
+  009B  75 10 00   MOV B_STEPS,#00h
   009E  11 AE      ACALL L00AE
   00A0  30 B3 F3   JNB INT1,L0096
   00A3  30 B3 F0   JNB INT1,L0096
@@ -120,8 +120,8 @@ L00AE:                  ; from 0070 007C 0091 009E 00AB 06FE +9
   00AE  C0 D0      PUSH PSW
   00B0  53 A8 82   ANL IE,#82h
   00B3  D3         SETB C
-  00B4  B0 50      ANL C,/2Ah.0
-  00B6  B0 51      ANL C,/2Ah.1
+  00B4  B0 50      ANL C,/SPEED0
+  00B6  B0 51      ANL C,/SPEED1
   00B8  92 61      MOV 2Ch.1,C
   00BA  C2 6D      CLR 2Dh.5
   00BC  C2 74      CLR 2Eh.4
@@ -293,10 +293,10 @@ timer1_setup:           ; from 00C5
   01A9  53 A8 88   ANL IE,#88h
   01AC  90 01 DF   MOV DPTR,#01DFh
   01AF  D2 B5      SETB T1
-  01B1  30 51 0B   JNB 2Ah.1,L01BF
+  01B1  30 51 0B   JNB SPEED1,L01BF
   01B4  90 01 E2   MOV DPTR,#01E2h
   01B7  C2 B5      CLR T1
-  01B9  30 50 03   JNB 2Ah.0,L01BF
+  01B9  30 50 03   JNB SPEED0,L01BF
   01BC  90 01 E5   MOV DPTR,#01E5h
 
 L01BF:                  ; from 01B1 01B9
@@ -321,7 +321,7 @@ L01D5:                  ; from 01D5
   01DC  D2 5F      SETB 2Bh.7
   01DE  22         RET
 
-; Three 3-byte entries selected by timer1_setup (DPTR = 01DFh, 01E2h or 01E5h)
+; Timer 0 speed settings, one per speed class: TH0 reload, then bank 1 R2 and R3
   01DF  DB 7Fh, E2h, C3h, 70h, EBh, E0h, 65h, F1h, E3h
 
 L01E8:                  ; from 09B4 0BC2 0F61
@@ -364,7 +364,7 @@ L021B:                  ; from 00EC
   0221  7C 01      MOV R4,#01h
   0223  D2 7C      SETB 2Fh.4
   0225  30 65 0C   JNB 2Ch.5,L0234
-  0228  E5 10      MOV A,10h
+  0228  E5 10      MOV A,B_STEPS
   022A  60 04      JZ L0230
   022C  7D 04      MOV R5,#04h
   022E  80 02      SJMP L0232
@@ -385,7 +385,7 @@ L0234:                  ; from 0225
 
 L0242:                  ; from 023F
   0242  50 0F      JNC L0253
-  0244  E5 10      MOV A,10h
+  0244  E5 10      MOV A,B_STEPS
   0246  60 0B      JZ L0253
   0248  E5 17      MOV A,17h
   024A  24 01      ADD A,#01h
@@ -499,18 +499,22 @@ L02C1:                  ; from 02BB
 L02DB:                  ; from 02A1
   02DB  22         RET
 
-; Stepper phase outputs. Each motor has a 4-bit coil pattern, rotated one
-; step per timer interrupt in the current direction, and written to its
-; nibble of P0 or P1 through a shadow copy so the other nibble is kept.
+; Phase outputs. Each motor has a coil pattern, replaced by the next one from
+; a lookup table on each timer interrupt, and written to its nibble of P0 or
+; P1 through a shadow copy so the other nibble is kept. Outputs idle high, so
+; coils appear to be active-low.
+;   Motor A: P0 bits 4-7, half-step table at 04CCh.
+;   Motor B: P0 bits 0-3, 3-phase table at 039Ah, bit 3 always set.
+;   Motor C: P1 bits 0-3, half-step table at 04CCh.
 next_phase_a:           ; from 02C1 02D9 0303
   02DC  20 79 0E   JB 2Fh.1,L02ED
   02DF  E5 43      MOV A,PHASE_A
   02E1  C4         SWAP A
-  02E2  A2 57      MOV C,2Ah.7
+  02E2  A2 57      MOV C,A_DIR
   02E4  91 CB      ACALL rotate_phase
   02E6  C4         SWAP A
   02E7  F5 43      MOV PHASE_A,A
-  02E9  91 DB      ACALL L04DB
+  02E9  91 DB      ACALL count_step
   02EB  92 79      MOV 2Fh.1,C
 
 L02ED:                  ; from 02DC
@@ -598,13 +602,13 @@ L0356:                  ; from 0347
 L0357:                  ; from 010A
   0357  75 2D 20   MOV 2Dh,#20h
   035A  7C FF      MOV R4,#FFh
-  035C  E5 10      MOV A,10h
+  035C  E5 10      MOV A,B_STEPS
   035E  23         RL A
   035F  FB         MOV R3,A
   0360  7A 00      MOV R2,#00h
   0362  60 25      JZ L0389
   0364  D2 6B      SETB 2Dh.3
-  0366  71 8A      ACALL L038A
+  0366  71 8A      ACALL next_phase_b
   0368  53 89 F0   ANL TMOD,#F0h
   036B  43 89 01   ORL TMOD,#01h
   036E  E4         CLR A
@@ -615,29 +619,33 @@ L0357:                  ; from 010A
   0378  D2 8C      SETB TR0
   037A  71 A1      ACALL output_phase_b
   037C  71 C9      ACALL L03C9
-  037E  E5 10      MOV A,10h
+  037E  E5 10      MOV A,B_STEPS
   0380  B4 01 04   CJNE A,#01h,L0387
   0383  D2 69      SETB 2Dh.1
   0385  80 02      SJMP L0389
 
 L0387:                  ; from 0380
-  0387  71 8A      ACALL L038A
+  0387  71 8A      ACALL next_phase_b
 
 L0389:                  ; from 0362 0385
   0389  22         RET
 
-L038A:                  ; from 0366 0387 03AC
+; Motor B, 3-phase: next pattern from the table at 039Ah, indexed by the low
+; 3 bits. One direction cycles 1, 3, 2, 6, 4, 5 (6-step commutation). Entry 0
+; is the RET at 039Ah and entry 7 the first byte at 03A1h: overlapping code,
+; used only for invalid patterns.
+next_phase_b:           ; from 0366 0387 03AC
   038A  E5 41      MOV A,PHASE_B
   038C  54 07      ANL A,#07h
-  038E  A2 55      MOV C,2Ah.5
+  038E  A2 55      MOV C,B_DIR
   0390  90 03 9A   MOV DPTR,#039Ah
-  0393  91 C4      ACALL L04C4
+  0393  91 C4      ACALL table_nibble
   0395  D2 E3      SETB ACC.3
   0397  F5 41      MOV PHASE_B,A
   0399  1B         DEC R3
   039A  22         RET
 
-; Table indexed from 039Ah (index starts at 1): phase patterns?
+; Motor B 3-phase table, entries 1-6 (entry 0 is the RET at 039Ah, entry 7 the byte at 03A1h)
   039B  DB 35h, 63h, 21h, 56h, 14h, 42h
 
 output_phase_b:         ; from 0172 037A 03B5
@@ -649,7 +657,7 @@ output_phase_b:         ; from 0172 037A 03B5
   03AB  22         RET
 
 L03AC:                  ; from 0113
-  03AC  71 8A      ACALL L038A
+  03AC  71 8A      ACALL next_phase_b
   03AE  20 69 04   JB 2Dh.1,L03B5
   03B1  71 C9      ACALL L03C9
   03B3  80 13      SJMP L03C8
@@ -745,11 +753,11 @@ L0433:                  ; from 042C 042E
 next_phase_c:           ; from 03F2 03F8 0458
   0434  20 71 0B   JB 2Eh.1,L0442
   0437  E9         MOV A,R1
-  0438  A2 56      MOV C,2Ah.6
+  0438  A2 56      MOV C,C_DIR
   043A  B3         CPL C
   043B  91 CB      ACALL rotate_phase
   043D  F9         MOV R1,A
-  043E  91 DB      ACALL L04DB
+  043E  91 DB      ACALL count_step
   0440  92 71      MOV 2Eh.1,C
 
 L0442:                  ; from 0434
@@ -806,7 +814,7 @@ L047C:                  ; from 046E 0475 0478
 L0482:                  ; from 047D
   0482  ED         MOV A,R5
   0483  90 05 8A   MOV DPTR,#058Ah
-  0486  93         MOVC A,@A+DPTR            ; A = table 058Ah
+  0486  93         MOVC A,@A+DPTR            ; A = motor C period adjustment
   0487  30 72 05   JNB 2Eh.2,L048F
   048A  75 F0 B0   MOV B,#B0h
   048D  80 03      SJMP L0492
@@ -848,7 +856,7 @@ L04B3:                  ; from 045A
 L04C3:                  ; from 04B3 04B6
   04C3  22         RET
 
-L04C4:                  ; from 0393 04CE
+table_nibble:           ; from 0393 04CE
   04C4  93         MOVC A,@A+DPTR
   04C5  40 01      JC L04C8
   04C7  C4         SWAP A
@@ -857,15 +865,20 @@ L04C8:                  ; from 04C5
   04C8  54 0F      ANL A,#0Fh
   04CA  22         RET
 
+; Half-step table at 04CCh, indexed by the current pattern: high nibble = next
+; pattern one way, low nibble = the other. From Eh: E 6 7 5 D 9 B A, i.e.
+; inverted 1 9 8 A 2 6 4 5, an 8-state half-step sequence. Entries 0-4 and F
+; overlap the instruction bytes at 04CCh-04D0h and 04DBh; they are invalid
+; patterns and still lead back into the cycle.
 rotate_phase:           ; from 025A 02E4 043B
   04CB  90 04 CC   MOV DPTR,#04CCh
-  04CE  91 C4      ACALL L04C4
+  04CE  91 C4      ACALL table_nibble
   04D0  22         RET
 
-; Not reached by the trace
+; Half-step table at 04CCh, entries 5-14 (the other entries overlap code)
   04D1  DB D7h, 7Eh, 56h, EEh, BDh, EBh, A9h, EEh, 95h, 6Ah
 
-L04DB:                  ; from 02E9 043E
+count_step:             ; from 02E9 043E
   04DB  C2 D5      CLR F0
   04DD  DB 07      DJNZ R3,L04E6
   04DF  BA 00 02   CJNE R2,#00h,L04E4
@@ -996,7 +1009,9 @@ L057A:                  ; from 056C 056F 0572
 ; Ramp table, 13 entries: 98h, 3Fh, 31h, 24h ... 14h (used by ramp_c)
   057D  DB 98h, 3Fh, 31h, 24h, 20h, 1Dh, 1Bh, 1Ah, 18h, 17h, 16h, 15h, 14h
 
-; Table at 058Ah: a short ramp (7Dh, 94h, 59h, 40h ...), then a repeating 1Ch 12h 0Bh pattern
+; Motor C period profile, indexed by R5: each move uses three consecutive entries
+; (start, after 12 steps, last 7 steps). Entry x B0h or 40h is subtracted from Timer 1.
+; The repeating 1Ch 12h 0Bh run looks like filler. Index 39h = 00h, 3Ah = B7h.
   058A  DB 7Dh, 94h, 59h, 40h, 32h, 2Ah, 24h, 1Fh, 1Ch, 13h, 1Bh, 1Bh, 12h, 0Bh, 1Ch, 12h
   059A  DB 0Bh, 1Ch, 12h, 0Bh, 1Ch, 12h, 0Bh, 1Ch, 12h, 0Bh, 1Ch, 12h, 0Bh, 1Ch, 12h, 0Bh
   05AA  DB 1Ch, 12h, 0Bh, 1Ch, 12h, 0Bh, 1Ch, 12h, 0Bh, 1Ch, 12h, 0Bh, 1Ch, 12h, 0Bh, 1Ch
@@ -1019,7 +1034,7 @@ L0601:                  ; from 0B9E
   060A  75 2A 00   MOV 2Ah,#00h
   060D  75 3C 00   MOV 3Ch,#00h
   0610  30 E5 0C   JNB ACC.5,L061F
-  0613  C2 57      CLR 2Ah.7
+  0613  C2 57      CLR A_DIR
   0615  75 3D 02   MOV 3Dh,#02h
   0618  31 29      ACALL run_move
   061A  12 0E 29   LCALL L0E29
@@ -1027,7 +1042,7 @@ L0601:                  ; from 0B9E
 
 L061F:                  ; from 0610
   061F  30 E6 07   JNB ACC.6,L0629
-  0622  D2 57      SETB 2Ah.7
+  0622  D2 57      SETB A_DIR
   0624  75 3D 02   MOV 3Dh,#02h
   0627  31 29      ACALL run_move
 
@@ -1037,7 +1052,7 @@ L0629:                  ; from 061D 061F
   062E  D2 0D      SETB 21h.5
   0630  12 0E D7   LCALL wait_polling_inputs ; wait, polling the shift register inputs
   0633  12 09 8A   LCALL read_shift_register ; read 8 bits from the external shift register
-  0636  30 57 05   JNB 2Ah.7,L063E
+  0636  30 57 05   JNB A_DIR,L063E
   0639  30 E6 3F   JNB ACC.6,L067B
   063C  80 03      SJMP L0641
 
@@ -1055,7 +1070,7 @@ L0641:                  ; from 063C
 L0651:                  ; from 0679
   0651  12 09 8A   LCALL read_shift_register ; read 8 bits from the external shift register
   0654  FC         MOV R4,A
-  0655  30 57 05   JNB 2Ah.7,L065D
+  0655  30 57 05   JNB A_DIR,L065D
   0658  30 E6 20   JNB ACC.6,L067B
   065B  80 03      SJMP L0660
 
@@ -1092,8 +1107,8 @@ L067D:                  ; from 0601 0604
 ;   9th bit. With 20h.7 set (loopback test), the first byte is captured in 00h
 ;   instead. After 8 echoed bytes, echo mode ends and 21h.0 is set. main_loop
 ;   enters echo mode after a C0h 80h or C0h C0h frame.
-;   Otherwise: check parity, then store a 2-byte frame: first byte in bank 1
-;   R7 (07h), second in R6 (06h). Until 21h.0 is set, frames whose first byte
+;   Otherwise: check parity, then store a 2-byte frame: first byte at 07h,
+;   second at 06h: R7 and R6 of bank 0, the main loop's registers. Until 21h.0 is set, frames whose first byte
 ;   is not C0h are ignored.
 SERIAL_ISR:             ; from 0023
   067E  C0 E0      PUSH ACC
@@ -1200,7 +1215,7 @@ L070B:                  ; from 0708
 
 L0714:                  ; from 070B
   0714  BF 00 09   CJNE R7,#00h,L0720
-  0717  20 56 06   JB 2Ah.6,L0720
+  0717  20 56 06   JB C_DIR,L0720
   071A  D2 5C      SETB 2Bh.4
   071C  7F 01      MOV R7,#01h
   071E  D2 5B      SETB 2Bh.3
@@ -1216,7 +1231,7 @@ L0720:                  ; from 0714 0717
   0731  C2 5B      CLR 2Bh.3
 
 L0733:                  ; from 0720
-  0733  B2 56      CPL 2Ah.6
+  0733  B2 56      CPL C_DIR
   0735  22         RET
 
 ; Loopback test: send AAh, 00h, FEh and 55h, and check each comes back.
@@ -1302,7 +1317,7 @@ L07AF:                  ; from 0798
 L07BA:                  ; from 0795 07AD 07AF
   07BA  22         RET
 
-; Not reached by the trace (69 bytes)
+; Unprogrammed (FFh) up to the 2 KB boundary at 0800h
   07BB  DB FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh
   07CB  DB FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh
   07DB  DB FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh, FFh
@@ -1327,8 +1342,8 @@ start:                  ; from 0000 0577 0C40
   080F  75 44 00   MOV P0_SHADOW,#00h
   0812  12 0F 15   LCALL clear_ram           ; clear iRAM 08h-42h, keep some flags
   0815  D2 01      SETB 20h.1
-  0817  E5 3B      MOV A,WARM_MARK
-  0819  B4 A5 02   CJNE A,#A5h,L081E         ; warm start?
+  0817  E5 3B      MOV A,OPTION_P23
+  0819  B4 A5 02   CJNE A,#A5h,L081E         ; P2.3 option present?
   081C  D2 5A      SETB 2Bh.2
 
 L081E:                  ; from 0819
@@ -1385,10 +1400,10 @@ L0866:                  ; from 0866 0869
   0866  30 B4 FD   JNB T0,L0866
   0869  30 B4 FA   JNB T0,L0866
   086C  12 00 64   LCALL motion_init
-  086F  75 35 01   MOV 35h,#01h
+  086F  75 35 01   MOV B_POSITION,#01h
   0872  E4         CLR A
-  0873  F5 36      MOV 36h,A
-  0875  F5 37      MOV 37h,A
+  0873  F5 36      MOV C_POS_HI,A
+  0875  F5 37      MOV C_POS_LO,A
   0877  F5 38      MOV 38h,A
   0879  F5 39      MOV 39h,A
   087B  22         RET
@@ -1417,7 +1432,7 @@ L0896:                  ; from 0BE6 0C16
   089B  D2 5D      SETB 2Bh.5
   089D  75 3C 00   MOV 3Ch,#00h
   08A0  75 3D 58   MOV 3Dh,#58h
-  08A3  C2 57      CLR 2Ah.7
+  08A3  C2 57      CLR A_DIR
   08A5  D2 A4      SETB P2.4
   08A7  F1 F2      ACALL L0FF2
   08A9  C2 A4      CLR P2.4
@@ -1503,7 +1518,7 @@ L0914:                  ; from 08F8 0901
   0914  80 02      SJMP L0918
 
 L0916:                  ; from 08F5
-  0916  A1 5E      AJMP L0D5E
+  0916  A1 5E      AJMP command_dispatch
 
 L0918:                  ; from 08EF 0914 0DCC
   0918  D2 AF      SETB EA
@@ -1620,14 +1635,16 @@ L09A7:                  ; from 0C0C
 L09BA:                  ; from 09A7 09AA 09AD
   09BA  22         RET
 
+; C1h xx: 40 = enter read mode; 20, 10, 08, 04 = mechanism actions (01F4h,
+; b_to_position_1, 0E9Dh, 0E46h), refused while busy or in read mode.
 ;   Calls: L01F4
-L09BB:                  ; from 0D93
+cmd_C1:                 ; from 0D93
   09BB  EE         MOV A,R6
   09BC  54 7C      ANL A,#7Ch
   09BE  60 3B      JZ L09FB
   09C0  B4 40 09   CJNE A,#40h,L09CC
   09C3  30 05 02   JNB 20h.5,L09C8
-  09C6  D2 45      SETB 28h.5
+  09C6  D2 45      SETB CMD_ERROR
 
 L09C8:                  ; from 09C3
   09C8  D2 05      SETB 20h.5
@@ -1646,7 +1663,7 @@ L09DE:                  ; from 09D8
 
 L09E0:                  ; from 09D5
   09E0  B4 10 04   CJNE A,#10h,L09E7
-  09E3  51 E7      ACALL L0AE7
+  09E3  51 E7      ACALL b_to_position_1
   09E5  80 10      SJMP L09F7
 
 L09E7:                  ; from 09E0
@@ -1660,18 +1677,20 @@ L09EE:                  ; from 09E7
   09F3  80 02      SJMP L09F7
 
 L09F5:                  ; from 09EE
-  09F5  D2 45      SETB 28h.5
+  09F5  D2 45      SETB CMD_ERROR
 
 L09F7:                  ; from 09DE 09E5 09EC 09F3
   09F7  80 02      SJMP L09FB
 
 L09F9:                  ; from 09CC 09CF 09D2
-  09F9  D2 45      SETB 28h.5
+  09F9  D2 45      SETB CMD_ERROR
 
 L09FB:                  ; from 09BE 09CA 09F7
   09FB  22         RET
 
-L09FC:                  ; from 0D8A
+; C0h xx: 00 = no action; 80 or C0 = enter echo mode; 01 = re-initialise and
+; accept all frames; 02 = leave read mode.
+cmd_C0:                 ; from 0D8A
   09FC  EE         MOV A,R6
   09FD  54 BB      ANL A,#BBh
   09FF  60 37      JZ L0A38
@@ -1688,7 +1707,7 @@ L0A0E:                  ; from 0A08
   0A11  80 02      SJMP L0A15
 
 L0A13:                  ; from 0A04 0A0C
-  0A13  D2 45      SETB 28h.5
+  0A13  D2 45      SETB CMD_ERROR
 
 L0A15:                  ; from 0A11
   0A15  80 21      SJMP L0A38
@@ -1713,10 +1732,10 @@ L0A2F:                  ; from 0A17
   0A34  80 02      SJMP L0A38
 
 L0A36:                  ; from 0A2F
-  0A36  D2 45      SETB 28h.5
+  0A36  D2 45      SETB CMD_ERROR
 
 L0A38:                  ; from 09FF 0A15 0A2D 0A34
-  0A38  20 45 15   JB 28h.5,L0A50
+  0A38  20 45 15   JB CMD_ERROR,L0A50
   0A3B  EE         MOV A,R6
   0A3C  A2 E6      MOV C,ACC.6
   0A3E  92 0A      MOV PARITY_ODD,C
@@ -1728,16 +1747,18 @@ L0A38:                  ; from 09FF 0A15 0A2D 0A34
 
 L0A4B:                  ; from 0A40
   0A4B  20 16 02   JB 22h.6,L0A50
-  0A4E  51 E7      ACALL L0AE7
+  0A4E  51 E7      ACALL b_to_position_1
 
 L0A50:                  ; from 0A38 0A49 0A4B
   0A50  7E 00      MOV R6,#00h
   0A52  A1 8C      AJMP L0D8C
 
-L0A54:                  ; from 0D9E
+; Dxh 00 in read mode: reply with the byte at 30h (D0), 31h (D1), 32h (D2),
+; 33h (D4), 34h (D8) or OPTION_P23 (DE). Outside read mode: 0A93h.
+cmd_Dx:                 ; from 0D9E
   0A54  EE         MOV A,R6
   0A55  60 04      JZ L0A5B
-  0A57  D2 45      SETB 28h.5
+  0A57  D2 45      SETB CMD_ERROR
   0A59  41 E6      AJMP L0AE6
 
 L0A5B:                  ; from 0A55
@@ -1769,11 +1790,11 @@ L0A7F:                  ; from 0A77
 
 L0A87:                  ; from 0A7F
   0A87  B4 DE 05   CJNE A,#DEh,L0A8F
-  0A8A  85 3B 3A   MOV TX_BYTE,WARM_MARK
+  0A8A  85 3B 3A   MOV TX_BYTE,OPTION_P23
   0A8D  80 02      SJMP L0A91
 
 L0A8F:                  ; from 0A87
-  0A8F  D2 45      SETB 28h.5
+  0A8F  D2 45      SETB CMD_ERROR
 
 L0A91:                  ; from 0A65 0A6D 0A75 0A7D 0A85 0A8D
   0A91  80 53      SJMP L0AE6
@@ -1818,24 +1839,24 @@ L0AD1:                  ; from 0AC1
 
 L0ADC:                  ; from 0AD1
   0ADC  B4 DE 05   CJNE A,#DEh,L0AE4
-  0ADF  85 3B 3A   MOV TX_BYTE,WARM_MARK
+  0ADF  85 3B 3A   MOV TX_BYTE,OPTION_P23
   0AE2  80 02      SJMP L0AE6
 
 L0AE4:                  ; from 0ADC
-  0AE4  D2 45      SETB 28h.5
+  0AE4  D2 45      SETB CMD_ERROR
 
 L0AE6:                  ; from 0A59 0A91 0AA0 0AAF 0ABF 0ACF +2
   0AE6  22         RET
 
 ;   Calls: L00AE, L01F4
-L0AE7:                  ; from 09E3 0A4E 0E7D 0EC5
+b_to_position_1:        ; from 09E3 0A4E 0E7D 0EC5
   0AE7  E4         CLR A
   0AE8  F5 16      MOV 16h,A
   0AEA  F5 17      MOV 17h,A
   0AEC  F5 2A      MOV 2Ah,A
   0AEE  74 01      MOV A,#01h
-  0AF0  F1 77      ACALL L0F77
-  0AF2  75 35 01   MOV 35h,#01h
+  0AF0  F1 77      ACALL set_b_target
+  0AF2  75 35 01   MOV B_POSITION,#01h
   0AF5  12 00 AE   LCALL L00AE
   0AF8  F1 E9      ACALL L0FE9
   0AFA  20 42 03   JB 28h.2,L0B00
@@ -1846,18 +1867,25 @@ L0B00:                  ; from 0AFA
   0B02  D2 16      SETB 22h.6
   0B04  22         RET
 
-;   Calls: run_move, L00AE, L0F77
-L0B05:                  ; from 0D7D
+; Motion commands (first byte 00h-BFh):
+;   00-7F: motor B to target (second byte) and motor C by (bits 0-4) x 2,
+;          direction bit 6; speed class from bit 5 and second byte bit 7.
+;   80-8F: motor A, count (bits 0-2):second byte, direction bit 3.
+;   90-9F: motor C, count (bits 0-2):second byte, direction bit 3.
+;   A0-AF: motor B to target (second byte), speed class bits 0-1.
+;   B0-BF: rejected.
+;   Calls: run_move, L00AE, set_b_target
+motion_command:         ; from 0D7D
   0B05  E4         CLR A
   0B06  F5 3C      MOV 3Ch,A
   0B08  F5 3D      MOV 3Dh,A
   0B0A  F5 16      MOV 16h,A
   0B0C  F5 17      MOV 17h,A
   0B0E  F5 2A      MOV 2Ah,A
-  0B10  F5 10      MOV 10h,A
+  0B10  F5 10      MOV B_STEPS,A
   0B12  EF         MOV A,R7
   0B13  20 E7 04   JB ACC.7,L0B1A
-  0B16  B1 CE      ACALL L0DCE
+  0B16  B1 CE      ACALL combined_move
   0B18  80 54      SJMP L0B6E
 
 L0B1A:                  ; from 0B13
@@ -1873,7 +1901,7 @@ L0B1A:                  ; from 0B13
 L0B27:                  ; from 0B1D
   0B27  EF         MOV A,R7
   0B28  A2 E3      MOV C,ACC.3
-  0B2A  92 57      MOV 2Ah.7,C
+  0B2A  92 57      MOV A_DIR,C
   0B2C  54 07      ANL A,#07h
   0B2E  F5 3C      MOV 3Ch,A
   0B30  8E 3D      MOV 3Dh,R6
@@ -1884,13 +1912,13 @@ L0B27:                  ; from 0B1D
 L0B39:                  ; from 0B20
   0B39  EF         MOV A,R7
   0B3A  A2 E3      MOV C,ACC.3
-  0B3C  92 56      MOV 2Ah.6,C
+  0B3C  92 56      MOV C_DIR,C
   0B3E  54 07      ANL A,#07h
   0B40  F5 16      MOV 16h,A
   0B42  8E 17      MOV 17h,R6
   0B44  53 17 FE   ANL 17h,#FEh
-  0B47  B1 F5      ACALL L0DF5
-  0B49  20 45 03   JB 28h.5,L0B4F
+  0B47  B1 F5      ACALL set_c_target
+  0B49  20 45 03   JB CMD_ERROR,L0B4F
   0B4C  12 00 AE   LCALL L00AE
 
 L0B4F:                  ; from 0B49
@@ -1900,21 +1928,21 @@ L0B51:                  ; from 0B23
   0B51  EE         MOV A,R6
   0B52  C2 E7      CLR ACC.7
   0B54  FE         MOV R6,A
-  0B55  12 0F 77   LCALL L0F77
+  0B55  12 0F 77   LCALL set_b_target        ; motor B: shortest path to target A (1-60h)
   0B58  E5 07      MOV A,07h
   0B5A  A2 E1      MOV C,ACC.1
-  0B5C  92 51      MOV 2Ah.1,C
+  0B5C  92 51      MOV SPEED1,C
   0B5E  A2 E0      MOV C,ACC.0
-  0B60  92 50      MOV 2Ah.0,C
-  0B62  20 45 05   JB 28h.5,L0B6A
-  0B65  8E 35      MOV 35h,R6
+  0B60  92 50      MOV SPEED0,C
+  0B62  20 45 05   JB CMD_ERROR,L0B6A
+  0B65  8E 35      MOV B_POSITION,R6
   0B67  12 00 AE   LCALL L00AE
 
 L0B6A:                  ; from 0B62
   0B6A  80 02      SJMP L0B6E
 
 L0B6C:                  ; from 0B25
-  0B6C  D2 45      SETB 28h.5
+  0B6C  D2 45      SETB CMD_ERROR
 
 L0B6E:                  ; from 0B18 0B37 0B4F 0B6A
   0B6E  22         RET
@@ -2036,7 +2064,7 @@ L0C1A:                  ; from 0C10 0C13
   0C22  D2 47      SETB 28h.7
   0C24  75 3C 04   MOV 3Ch,#04h
   0C27  75 3D 20   MOV 3Dh,#20h
-  0C2A  C2 57      CLR 2Ah.7
+  0C2A  C2 57      CLR A_DIR
   0C2C  12 01 29   LCALL run_move            ; run a move, waiting for it to finish
 
 L0C2F:                  ; from 0BA1 0BAF 0C05 0C0E 0C18 0C1A +1
@@ -2044,7 +2072,7 @@ L0C2F:                  ; from 0BA1 0BAF 0C05 0C0E 0C18 0C1A +1
 
 L0C31:                  ; from 0B93
   0C31  30 E4 10   JNB ACC.4,L0C44
-  0C34  E5 3B      MOV A,WARM_MARK
+  0C34  E5 3B      MOV A,OPTION_P23
   0C36  B4 A5 07   CJNE A,#A5h,L0C40
   0C39  20 5D 04   JB 2Bh.5,L0C40
   0C3C  11 61      ACALL L0861
@@ -2092,7 +2120,7 @@ L0C65:                  ; from 0C57
   0C70  75 3A 00   MOV TX_BYTE,#00h
   0C73  11 AF      ACALL serial_send
   0C75  F1 F2      ACALL L0FF2
-  0C77  E5 3B      MOV A,WARM_MARK
+  0C77  E5 3B      MOV A,OPTION_P23
   0C79  B4 A5 09   CJNE A,#A5h,L0C85
   0C7C  20 5D 06   JB 2Bh.5,L0C85
   0C7F  31 8A      ACALL read_shift_register
@@ -2104,7 +2132,7 @@ L0C85:                  ; from 0C63 0C79 0C7C 0C81
   0C87  E4         CLR A
   0C88  75 2A 21   MOV 2Ah,#21h
   0C8B  F5 16      MOV 16h,A
-  0C8D  75 10 12   MOV 10h,#12h
+  0C8D  75 10 12   MOV B_STEPS,#12h
   0C90  75 17 54   MOV 17h,#54h
   0C93  75 3C 00   MOV 3Ch,#00h
   0C96  75 3D 10   MOV 3Dh,#10h
@@ -2112,7 +2140,7 @@ L0C85:                  ; from 0C63 0C79 0C7C 0C81
   0C9B  7E 30      MOV R6,#30h
   0C9D  12 01 29   LCALL run_move            ; run a move, waiting for it to finish
   0CA0  30 02 0D   JNB 20h.2,L0CB0
-  0CA3  75 10 1E   MOV 10h,#1Eh
+  0CA3  75 10 1E   MOV B_STEPS,#1Eh
   0CA6  75 2A 03   MOV 2Ah,#03h
   0CA9  75 17 0C   MOV 17h,#0Ch
   0CAC  7F 83      MOV R7,#83h
@@ -2125,7 +2153,7 @@ L0CB0:                  ; from 0CA0
 L0CB6:                  ; from 0CB0
   0CB6  12 00 AE   LCALL L00AE
   0CB9  F1 D7      ACALL L0FD7
-  0CBB  75 10 00   MOV 10h,#00h
+  0CBB  75 10 00   MOV B_STEPS,#00h
 
 L0CBE:                  ; from 0C4C
   0CBE  22         RET
@@ -2134,41 +2162,41 @@ L0CBE:                  ; from 0C4C
 move_to_target:         ; from 0FE6 0FEF
   0CBF  D2 B6      SETB WR
   0CC1  75 2A 00   MOV 2Ah,#00h
-  0CC4  E5 36      MOV A,36h
+  0CC4  E5 36      MOV A,C_POS_HI
   0CC6  B5 3C 05   CJNE A,3Ch,L0CCE
-  0CC9  E5 37      MOV A,37h
+  0CC9  E5 37      MOV A,C_POS_LO
   0CCB  B5 3D 00   CJNE A,3Dh,L0CCE
 
 L0CCE:                  ; from 0CC6 0CCB
   0CCE  40 11      JC L0CE1
-  0CD0  D2 56      SETB 2Ah.6
-  0CD2  E5 37      MOV A,37h
+  0CD0  D2 56      SETB C_DIR
+  0CD2  E5 37      MOV A,C_POS_LO
   0CD4  C3         CLR C
   0CD5  95 3D      SUBB A,3Dh
   0CD7  F5 17      MOV 17h,A
-  0CD9  E5 36      MOV A,36h
+  0CD9  E5 36      MOV A,C_POS_HI
   0CDB  95 3C      SUBB A,3Ch
   0CDD  F5 16      MOV 16h,A
   0CDF  80 0F      SJMP L0CF0
 
 L0CE1:                  ; from 0CCE
-  0CE1  C2 56      CLR 2Ah.6
+  0CE1  C2 56      CLR C_DIR
   0CE3  E5 3D      MOV A,3Dh
   0CE5  C3         CLR C
-  0CE6  95 37      SUBB A,37h
+  0CE6  95 37      SUBB A,C_POS_LO
   0CE8  F5 17      MOV 17h,A
   0CEA  E5 3C      MOV A,3Ch
-  0CEC  95 36      SUBB A,36h
+  0CEC  95 36      SUBB A,C_POS_HI
   0CEE  F5 16      MOV 16h,A
 
 L0CF0:                  ; from 0CDF
-  0CF0  85 3C 36   MOV 36h,3Ch
-  0CF3  85 3D 37   MOV 37h,3Dh
-  0CF6  75 10 00   MOV 10h,#00h
+  0CF0  85 3C 36   MOV C_POS_HI,3Ch
+  0CF3  85 3D 37   MOV C_POS_LO,3Dh
+  0CF6  75 10 00   MOV B_STEPS,#00h
   0CF9  12 00 AE   LCALL L00AE
   0CFC  22         RET
 
-;   Calls: sweep_step, run_move, L00AE, L01EE
+;   Calls: sweep_step, run_move, L00AE
 L0CFD:                  ; from 08E7
   0CFD  30 02 05   JNB 20h.2,L0D05
   0D00  12 06 F4   LCALL sweep_step          ; next position of a back-and-forth sweep
@@ -2178,49 +2206,49 @@ L0D05:                  ; from 0CFD
   0D05  DE 3B      DJNZ R6,L0D42
   0D07  12 01 29   LCALL run_move            ; run a move, waiting for it to finish
   0D0A  0F         INC R7
-  0D0B  F1 9F      ACALL L0F9F
+  0D0B  F1 9F      ACALL sweep_speed_class
   0D0D  BF 01 07   CJNE R7,#01h,L0D17
-  0D10  75 10 26   MOV 10h,#26h
-  0D13  D2 55      SETB 2Ah.5
+  0D10  75 10 26   MOV B_STEPS,#26h
+  0D13  D2 55      SETB B_DIR
   0D15  80 1B      SJMP L0D32
 
 L0D17:                  ; from 0D0D
   0D17  BF 02 07   CJNE R7,#02h,L0D21
-  0D1A  75 10 10   MOV 10h,#10h
-  0D1D  D2 55      SETB 2Ah.5
+  0D1A  75 10 10   MOV B_STEPS,#10h
+  0D1D  D2 55      SETB B_DIR
   0D1F  80 11      SJMP L0D32
 
 L0D21:                  ; from 0D17
   0D21  BF 32 07   CJNE R7,#32h,L0D2B
-  0D24  75 10 18   MOV 10h,#18h
-  0D27  D2 55      SETB 2Ah.5
+  0D24  75 10 18   MOV B_STEPS,#18h
+  0D27  D2 55      SETB B_DIR
   0D29  80 07      SJMP L0D32
 
 L0D2B:                  ; from 0D21
-  0D2B  75 10 23   MOV 10h,#23h
-  0D2E  C2 55      CLR 2Ah.5
+  0D2B  75 10 23   MOV B_STEPS,#23h
+  0D2E  C2 55      CLR B_DIR
   0D30  7F 00      MOV R7,#00h
 
 L0D32:                  ; from 0D15 0D1F 0D29
   0D32  75 17 00   MOV 17h,#00h
   0D35  12 00 AE   LCALL L00AE
   0D38  F1 D7      ACALL L0FD7
-  0D3A  C2 55      CLR 2Ah.5
+  0D3A  C2 55      CLR B_DIR
   0D3C  7E 30      MOV R6,#30h
-  0D3E  B2 56      CPL 2Ah.6
+  0D3E  B2 56      CPL C_DIR
   0D40  80 1B      SJMP L0D5D
 
 L0D42:                  ; from 0D05
-  0D42  75 10 00   MOV 10h,#00h
+  0D42  75 10 00   MOV B_STEPS,#00h
   0D45  EF         MOV A,R7
   0D46  60 0D      JZ L0D55
-  0D48  B2 55      CPL 2Ah.5
-  0D4A  75 10 05   MOV 10h,#05h
+  0D48  B2 55      CPL B_DIR
+  0D4A  75 10 05   MOV B_STEPS,#05h
   0D4D  14         DEC A
   0D4E  60 05      JZ L0D55
   0D50  0F         INC R7
-  0D51  F1 9F      ACALL L0F9F
-  0D53  8E 10      MOV 10h,R6
+  0D51  F1 9F      ACALL sweep_speed_class
+  0D53  8E 10      MOV B_STEPS,R6
 
 L0D55:                  ; from 0D46 0D4E
   0D55  75 17 18   MOV 17h,#18h
@@ -2230,7 +2258,10 @@ L0D55:                  ; from 0D46 0D4E
 L0D5D:                  ; from 0D03 0D40
   0D5D  22         RET
 
-L0D5E:                  ; from 0916
+; Command dispatch on the first byte: 00h-BFh motion_command, C0h cmd_C0,
+; C1h cmd_C1, D0h-DFh cmd_Dx, anything else rejected. Then a 1-byte reply:
+; TX_BYTE, normally the status byte at 29h.
+command_dispatch:       ; from 0916
   0D5E  20 64 04   JB 2Ch.4,L0D65
   0D61  C2 A9      CLR ET0
   0D63  C2 3F      CLR 27h.7
@@ -2249,11 +2280,11 @@ L0D6E:                  ; from 0D66 0D69
   0D7A  12 01 EE   LCALL L01EE
 
 L0D7D:                  ; from 0D77
-  0D7D  71 05      ACALL L0B05
+  0D7D  71 05      ACALL motion_command
   0D7F  80 02      SJMP L0D83
 
 L0D81:                  ; from 0D6E 0D71 0D74
-  0D81  D2 45      SETB 28h.5
+  0D81  D2 45      SETB CMD_ERROR
 
 L0D83:                  ; from 0D7F
   0D83  D2 0C      SETB 21h.4
@@ -2261,7 +2292,7 @@ L0D83:                  ; from 0D7F
 
 L0D87:                  ; from 0D6C
   0D87  B4 C0 06   CJNE A,#C0h,L0D90
-  0D8A  21 FC      AJMP L09FC
+  0D8A  21 FC      AJMP cmd_C0
 
 L0D8C:                  ; from 0A52
   0D8C  D2 0C      SETB 21h.4
@@ -2269,26 +2300,26 @@ L0D8C:                  ; from 0A52
 
 L0D90:                  ; from 0D87
   0D90  B4 C1 06   CJNE A,#C1h,L0D99
-  0D93  31 BB      ACALL L09BB
+  0D93  31 BB      ACALL cmd_C1
   0D95  D2 0C      SETB 21h.4
   0D97  80 0B      SJMP L0DA4
 
 L0D99:                  ; from 0D90
   0D99  54 F0      ANL A,#F0h
   0D9B  B4 D0 04   CJNE A,#D0h,L0DA2
-  0D9E  51 54      ACALL L0A54
+  0D9E  51 54      ACALL cmd_Dx
   0DA0  80 02      SJMP L0DA4
 
 L0DA2:                  ; from 0D9B
-  0DA2  D2 45      SETB 28h.5
+  0DA2  D2 45      SETB CMD_ERROR
 
 L0DA4:                  ; from 0D85 0D8E 0D97 0DA0
-  0DA4  30 45 0B   JNB 28h.5,L0DB2
+  0DA4  30 45 0B   JNB CMD_ERROR,L0DB2
   0DA7  D2 1C      SETB 23h.4
   0DA9  43 29 22   ORL 29h,#22h
   0DAC  D2 11      SETB 22h.1
   0DAE  D2 0C      SETB 21h.4
-  0DB0  C2 45      CLR 28h.5
+  0DB0  C2 45      CLR CMD_ERROR
 
 L0DB2:                  ; from 0DA4
   0DB2  11 7C      ACALL serial_init
@@ -2307,48 +2338,48 @@ L0DCA:                  ; from 0DB6 0DC4
   0DCC  21 18      AJMP L0918
 
 ;   Calls: L00AE
-L0DCE:                  ; from 0B16
+combined_move:          ; from 0B16
   0DCE  EE         MOV A,R6
   0DCF  A2 E7      MOV C,ACC.7
-  0DD1  92 50      MOV 2Ah.0,C
+  0DD1  92 50      MOV SPEED0,C
   0DD3  C2 E7      CLR ACC.7
   0DD5  FE         MOV R6,A
-  0DD6  F1 77      ACALL L0F77
-  0DD8  20 45 19   JB 28h.5,L0DF4
+  0DD6  F1 77      ACALL set_b_target
+  0DD8  20 45 19   JB CMD_ERROR,L0DF4
   0DDB  EF         MOV A,R7
   0DDC  A2 E5      MOV C,ACC.5
-  0DDE  92 51      MOV 2Ah.1,C
+  0DDE  92 51      MOV SPEED1,C
   0DE0  A2 E6      MOV C,ACC.6
-  0DE2  92 56      MOV 2Ah.6,C
+  0DE2  92 56      MOV C_DIR,C
   0DE4  54 1F      ANL A,#1Fh
   0DE6  C3         CLR C
   0DE7  33         RLC A
   0DE8  F5 17      MOV 17h,A
-  0DEA  B1 F5      ACALL L0DF5
-  0DEC  20 45 05   JB 28h.5,L0DF4
+  0DEA  B1 F5      ACALL set_c_target
+  0DEC  20 45 05   JB CMD_ERROR,L0DF4
   0DEF  12 00 AE   LCALL L00AE
-  0DF2  8E 35      MOV 35h,R6
+  0DF2  8E 35      MOV B_POSITION,R6
 
 L0DF4:                  ; from 0DD8 0DEC
   0DF4  22         RET
 
-L0DF5:                  ; from 0B47 0DEA
-  0DF5  20 56 0D   JB 2Ah.6,L0E05
-  0DF8  E5 37      MOV A,37h
+set_c_target:           ; from 0B47 0DEA
+  0DF5  20 56 0D   JB C_DIR,L0E05
+  0DF8  E5 37      MOV A,C_POS_LO
   0DFA  C3         CLR C
   0DFB  35 17      ADDC A,17h
   0DFD  FB         MOV R3,A
-  0DFE  E5 36      MOV A,36h
+  0DFE  E5 36      MOV A,C_POS_HI
   0E00  35 16      ADDC A,16h
   0E02  FC         MOV R4,A
   0E03  80 0B      SJMP L0E10
 
 L0E05:                  ; from 0DF5
-  0E05  E5 37      MOV A,37h
+  0E05  E5 37      MOV A,C_POS_LO
   0E07  C3         CLR C
   0E08  95 17      SUBB A,17h
   0E0A  FB         MOV R3,A
-  0E0B  E5 36      MOV A,36h
+  0E0B  E5 36      MOV A,C_POS_HI
   0E0D  95 16      SUBB A,16h
   0E0F  FC         MOV R4,A
 
@@ -2362,21 +2393,21 @@ L0E1A:                  ; from 0E12 0E15
   0E1A  50 0A      JNC L0E26
 
 L0E1C:                  ; from 0E18
-  0E1C  8C 36      MOV 36h,R4
+  0E1C  8C 36      MOV C_POS_HI,R4
   0E1E  8C 38      MOV 38h,R4
-  0E20  8B 37      MOV 37h,R3
+  0E20  8B 37      MOV C_POS_LO,R3
   0E22  8B 39      MOV 39h,R3
   0E24  80 02      SJMP L0E28
 
 L0E26:                  ; from 0E10 0E1A
-  0E26  D2 45      SETB 28h.5
+  0E26  D2 45      SETB CMD_ERROR
 
 L0E28:                  ; from 0E24
   0E28  22         RET
 
 L0E29:                  ; from 061A 0646 0665 08CE 0B35
   0E29  C0 E0      PUSH ACC
-  0E2B  E5 3B      MOV A,WARM_MARK
+  0E2B  E5 3B      MOV A,OPTION_P23
   0E2D  B4 A5 13   CJNE A,#A5h,L0E43
   0E30  20 18 10   JB 23h.0,L0E43
   0E33  31 8A      ACALL read_shift_register
@@ -2394,9 +2425,9 @@ L0E43:                  ; from 0E2D 0E30 0E35 0E39
 
 ;   Calls: run_move
 L0E46:                  ; from 09F1 0C83
-  0E46  E5 3B      MOV A,WARM_MARK
+  0E46  E5 3B      MOV A,OPTION_P23
   0E48  B4 A0 04   CJNE A,#A0h,L0E4F
-  0E4B  D2 45      SETB 28h.5
+  0E4B  D2 45      SETB CMD_ERROR
   0E4D  80 4D      SJMP L0E9C
 
 L0E4F:                  ; from 0E48
@@ -2410,7 +2441,7 @@ L0E54:                  ; from 0E4F
   0E5B  F1 F2      ACALL L0FF2
   0E5D  C2 A3      CLR P2.3
   0E5F  D2 59      SETB 2Bh.1
-  0E61  C2 57      CLR 2Ah.7
+  0E61  C2 57      CLR A_DIR
   0E63  75 3C 02   MOV 3Ch,#02h
   0E66  75 3D 40   MOV 3Dh,#40h
   0E69  12 01 29   LCALL run_move            ; run a move, waiting for it to finish
@@ -2421,7 +2452,7 @@ L0E54:                  ; from 0E4F
   0E75  D2 19      SETB 23h.1
   0E77  75 26 91   MOV 26h,#91h
   0E7A  20 03 02   JB 20h.3,L0E7F
-  0E7D  51 E7      ACALL L0AE7
+  0E7D  51 E7      ACALL b_to_position_1
 
 L0E7F:                  ; from 0E7A
   0E7F  80 1B      SJMP L0E9C
@@ -2445,16 +2476,16 @@ L0E9C:                  ; from 0E4D 0E54 0E7F
 
 ;   Calls: run_move
 L0E9D:                  ; from 09EA 0C3E 0E52
-  0E9D  E5 3B      MOV A,WARM_MARK
+  0E9D  E5 3B      MOV A,OPTION_P23
   0E9F  B4 A0 04   CJNE A,#A0h,L0EA6
-  0EA2  D2 45      SETB 28h.5
+  0EA2  D2 45      SETB CMD_ERROR
   0EA4  80 30      SJMP L0ED6
 
 L0EA6:                  ; from 0E9F
   0EA6  C2 5D      CLR 2Bh.5
   0EA8  F1 E9      ACALL L0FE9
   0EAA  D2 58      SETB 2Bh.0
-  0EAC  C2 57      CLR 2Ah.7
+  0EAC  C2 57      CLR A_DIR
   0EAE  75 3C 05   MOV 3Ch,#05h
   0EB1  75 3D 26   MOV 3Dh,#26h
   0EB4  12 01 29   LCALL run_move            ; run a move, waiting for it to finish
@@ -2464,7 +2495,7 @@ L0EA6:                  ; from 0E9F
   0EBE  D2 11      SETB 22h.1
   0EC0  D2 19      SETB 23h.1
   0EC2  75 26 B1   MOV 26h,#B1h
-  0EC5  51 E7      ACALL L0AE7
+  0EC5  51 E7      ACALL b_to_position_1
   0EC7  80 0D      SJMP L0ED6
 
 L0EC9:                  ; from 0EB7
@@ -2524,7 +2555,7 @@ L0F14:                  ; from 0EFF
   0F14  22         RET
 
 ; Clear iRAM 08h-42h, keeping flags 2Bh.2 and 28h.2. Then test P2.3: if it
-; reads high, WARM_MARK = A5h, otherwise A0h.
+; reads high, OPTION_P23 = A5h, otherwise A0h (an option or presence input).
 ;   Calls: L01E8, L01F4
 clear_ram:              ; from 077E 0812 0A22
   0F15  A2 5A      MOV C,2Bh.2
@@ -2544,11 +2575,11 @@ L0F20:                  ; from 0F22
   0F2B  92 5A      MOV 2Bh.2,C
   0F2D  D2 A3      SETB P2.3
   0F2F  20 A3 05   JB P2.3,L0F37
-  0F32  75 3B A0   MOV WARM_MARK,#A0h
+  0F32  75 3B A0   MOV OPTION_P23,#A0h
   0F35  80 03      SJMP L0F3A
 
 L0F37:                  ; from 0F2F
-  0F37  75 3B A5   MOV WARM_MARK,#A5h
+  0F37  75 3B A5   MOV OPTION_P23,#A5h
 
 L0F3A:                  ; from 0F35
   0F3A  C2 A4      CLR P2.4
@@ -2578,7 +2609,7 @@ L0F67:                  ; from 0F5E
   0F6A  12 01 F4   LCALL L01F4
 
 L0F6D:                  ; from 0F67
-  0F6D  E5 3B      MOV A,WARM_MARK
+  0F6D  E5 3B      MOV A,OPTION_P23
   0F6F  B4 A5 02   CJNE A,#A5h,L0F74
   0F72  D2 18      SETB 23h.0
 
@@ -2586,45 +2617,50 @@ L0F74:                  ; from 0F6F
   0F74  F1 E9      ACALL L0FE9
   0F76  22         RET
 
-L0F77:                  ; from 0AF0 0B55 0DD6
+; Motor B, 96-position circular axis. Target must be 01h-60h. Distance from
+; B_POSITION; if more than 30h, go the other way (60h - distance) and flip
+; the direction. Result in B_STEPS.
+set_b_target:           ; from 0AF0 0B55 0DD6
   0F77  60 23      JZ L0F9C
   0F79  B4 61 00   CJNE A,#61h,L0F7C
 
 L0F7C:                  ; from 0F79
   0F7C  50 1E      JNC L0F9C
   0F7E  C3         CLR C
-  0F7F  95 35      SUBB A,35h
+  0F7F  95 35      SUBB A,B_POSITION
   0F81  50 06      JNC L0F89
-  0F83  D2 55      SETB 2Ah.5
+  0F83  D2 55      SETB B_DIR
   0F85  F4         CPL A
   0F86  04         INC A
   0F87  80 02      SJMP L0F8B
 
 L0F89:                  ; from 0F81
-  0F89  C2 55      CLR 2Ah.5
+  0F89  C2 55      CLR B_DIR
 
 L0F8B:                  ; from 0F87
   0F8B  FB         MOV R3,A
   0F8C  C3         CLR C
   0F8D  94 30      SUBB A,#30h
   0F8F  40 07      JC L0F98
-  0F91  B2 55      CPL 2Ah.5
+  0F91  B2 55      CPL B_DIR
   0F93  74 60      MOV A,#60h
   0F95  C3         CLR C
   0F96  9B         SUBB A,R3
   0F97  FB         MOV R3,A
 
 L0F98:                  ; from 0F8F
-  0F98  8B 10      MOV 10h,R3
+  0F98  8B 10      MOV B_STEPS,R3
   0F9A  80 02      SJMP L0F9E
 
 L0F9C:                  ; from 0F77 0F7C
-  0F9C  D2 45      SETB 28h.5
+  0F9C  D2 45      SETB CMD_ERROR
 
 L0F9E:                  ; from 0F9A
   0F9E  22         RET
 
-L0F9F:                  ; from 0D0B 0D51
+; Speed class for sweep index R7: byte R7/4 of the table at 0FBEh, bit pair
+; R7 mod 4, into SPEED0/SPEED1.
+sweep_speed_class:      ; from 0D0B 0D51
   0F9F  EF         MOV A,R7
   0FA0  F9         MOV R1,A
   0FA1  C3         CLR C
@@ -2632,7 +2668,7 @@ L0F9F:                  ; from 0D0B 0D51
   0FA3  C3         CLR C
   0FA4  13         RRC A
   0FA5  90 0F BE   MOV DPTR,#0FBEh
-  0FA8  93         MOVC A,@A+DPTR            ; A = table 0FBEh
+  0FA8  93         MOVC A,@A+DPTR            ; A = packed speed classes
   0FA9  53 01 03   ANL 01h,#03h
   0FAC  09         INC R1
 
@@ -2647,12 +2683,12 @@ L0FB1:                  ; from 0FAD
 
 L0FB5:                  ; from 0FAF
   0FB5  A2 E0      MOV C,ACC.0
-  0FB7  92 50      MOV 2Ah.0,C
+  0FB7  92 50      MOV SPEED0,C
   0FB9  A2 E1      MOV C,ACC.1
-  0FBB  92 51      MOV 2Ah.1,C
+  0FBB  92 51      MOV SPEED1,C
   0FBD  22         RET
 
-; Table at 0FBEh
+; Sweep speed classes: 2 bits per sweep index, 4 per byte (see sweep_speed_class)
   0FBE  DB FDh, FFh, BFh, 9Bh, 97h, 67h, BAh, AFh, FAh, 6Ah, EAh, EEh, DEh, EAh, EAh, FFh
   0FCE  DB EFh, AEh, BFh, AFh, 7Eh, 7Fh, FBh, EEh, 1Fh
 

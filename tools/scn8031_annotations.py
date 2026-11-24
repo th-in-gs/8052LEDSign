@@ -15,15 +15,26 @@ OUTPUT = 'scn8031/scn8031_annotated.lst'
 
 IRAM = {
     0x3A: 'TX_BYTE',        # byte to send (serial_send)
-    0x3B: 'WARM_MARK',      # A5h after a warm start, A0h otherwise
-    0x41: 'PHASE_B',        # phase for P0 high nibble
-    0x42: 'P1_SHADOW',      # P1 copy: low nibble = phase C
-    0x43: 'PHASE_A',        # phase for P0 low nibble
-    0x44: 'P0_SHADOW',      # P0 copy: low nibble = phase A, high = phase B
+    0x3B: 'OPTION_P23',     # A5h if P2.3 read high at reset, A0h if low
+    0x10: 'B_STEPS',        # motor B: positions to move
+    0x35: 'B_POSITION',     # motor B: carousel position, 01h-60h
+    0x36: 'C_POS_HI',       # motor C: position, 0000h-0C60h
+    0x37: 'C_POS_LO',
+    0x41: 'PHASE_B',        # motor B pattern, P0 bits 0-3 (bit 3 always set)
+    0x42: 'P1_SHADOW',      # P1 copy: low nibble = motor C pattern
+    0x43: 'PHASE_A',        # motor A pattern, P0 bits 4-7
+    0x44: 'P0_SHADOW',      # P0 copy
 }
 
 BITS = {
     0x0A: 'PARITY_ODD',     # 21h.2: parity sense for the 9th serial bit
+    0x2D: 'READ_MODE',      # 20h.5: D-commands return registers
+    0x45: 'CMD_ERROR',      # 28h.5: command rejected
+    0x50: 'SPEED0',         # 2Ah.0: speed class bit 0
+    0x51: 'SPEED1',         # 2Ah.1: speed class bit 1
+    0x55: 'B_DIR',          # 2Ah.5: motor B direction
+    0x56: 'C_DIR',          # 2Ah.6: motor C direction
+    0x57: 'A_DIR',          # 2Ah.7: motor A direction
     0xA0: 'SR_LOAD',        # P2.0: shift register load
     0xA1: 'SR_CLK',         # P2.1: shift register clock
     0xA2: 'SR_DATA',        # P2.2: shift register data in
@@ -43,6 +54,19 @@ LABELS = {
     0x01A6: 'timer1_setup',
     0x02DC: 'next_phase_a',
     0x02EE: 'output_phase_a',
+    0x038A: 'next_phase_b',
+    0x04C4: 'table_nibble',
+    0x04DB: 'count_step',
+    0x0B05: 'motion_command',
+    0x0D5E: 'command_dispatch',
+    0x09FC: 'cmd_C0',
+    0x09BB: 'cmd_C1',
+    0x0A54: 'cmd_Dx',
+    0x0DCE: 'combined_move',
+    0x0DF5: 'set_c_target',
+    0x0F77: 'set_b_target',
+    0x0F9F: 'sweep_speed_class',
+    0x0AE7: 'b_to_position_1',
     0x031A: 'ramp_c',
     0x03A1: 'output_phase_b',
     0x0434: 'next_phase_c',
@@ -71,11 +95,17 @@ SUMMARY = {
     0x0026: 'all outputs to idle',
     0x0129: 'run a move, waiting for it to finish',
     0x02DC: 'step phase A in the current direction',
-    0x02EE: 'P0 low nibble <- phase A',
-    0x03A1: 'P0 high nibble <- phase B',
+    0x02EE: 'P0 high nibble <- motor A pattern',
+    0x03A1: 'P0 low nibble <- motor B pattern',
+    0x038A: 'next 3-phase pattern for motor B',
+    0x04C4: 'A = table entry, high nibble if C=0, low if C=1',
+    0x04DB: 'count down a step; C = 1 when done',
+    0x0DF5: 'motor C target = position +/- 16h:17h, checked',
+    0x0F77: 'motor B: shortest path to target A (1-60h)',
+    0x0F9F: 'speed class for sweep index R7, from 0FBEh',
     0x0434: 'step phase C in the current direction',
     0x0443: 'P1 low nibble <- phase C',
-    0x04CB: 'rotate a 4-bit phase pattern',
+    0x04CB: 'next half-step pattern (table 04CCh)',
     0x06F4: 'next position of a back-and-forth sweep',
     0x074C: 'send TX_BYTE and check it comes back',
     0x087C: 'UART: mode 3, 9600 baud at 11.0592 MHz',
@@ -112,9 +142,61 @@ whichever is moving. When bit 27h.7 is set, timer0_alt runs instead.""",
 Timer 1: steps motor C (P1 low nibble). Register bank 2.""",
 
 0x02DC: """\
-Stepper phase outputs. Each motor has a 4-bit coil pattern, rotated one
-step per timer interrupt in the current direction, and written to its
-nibble of P0 or P1 through a shadow copy so the other nibble is kept.""",
+Phase outputs. Each motor has a coil pattern, replaced by the next one from
+a lookup table on each timer interrupt, and written to its nibble of P0 or
+P1 through a shadow copy so the other nibble is kept. Outputs idle high, so
+coils appear to be active-low.
+  Motor A: P0 bits 4-7, half-step table at 04CCh.
+  Motor B: P0 bits 0-3, 3-phase table at 039Ah, bit 3 always set.
+  Motor C: P1 bits 0-3, half-step table at 04CCh.""",
+
+0x038A: """\
+Motor B, 3-phase: next pattern from the table at 039Ah, indexed by the low
+3 bits. One direction cycles 1, 3, 2, 6, 4, 5 (6-step commutation). Entry 0
+is the RET at 039Ah and entry 7 the first byte at 03A1h: overlapping code,
+used only for invalid patterns.""",
+
+0x04CB: """\
+Half-step table at 04CCh, indexed by the current pattern: high nibble = next
+pattern one way, low nibble = the other. From Eh: E 6 7 5 D 9 B A, i.e.
+inverted 1 9 8 A 2 6 4 5, an 8-state half-step sequence. Entries 0-4 and F
+overlap the instruction bytes at 04CCh-04D0h and 04DBh; they are invalid
+patterns and still lead back into the cycle.""",
+
+0x0B05: """\
+Motion commands (first byte 00h-BFh):
+  00-7F: motor B to target (second byte) and motor C by (bits 0-4) x 2,
+         direction bit 6; speed class from bit 5 and second byte bit 7.
+  80-8F: motor A, count (bits 0-2):second byte, direction bit 3.
+  90-9F: motor C, count (bits 0-2):second byte, direction bit 3.
+  A0-AF: motor B to target (second byte), speed class bits 0-1.
+  B0-BF: rejected.""",
+
+0x0D5E: """\
+Command dispatch on the first byte: 00h-BFh motion_command, C0h cmd_C0,
+C1h cmd_C1, D0h-DFh cmd_Dx, anything else rejected. Then a 1-byte reply:
+TX_BYTE, normally the status byte at 29h.""",
+
+0x09FC: """\
+C0h xx: 00 = no action; 80 or C0 = enter echo mode; 01 = re-initialise and
+accept all frames; 02 = leave read mode.""",
+
+0x09BB: """\
+C1h xx: 40 = enter read mode; 20, 10, 08, 04 = mechanism actions (01F4h,
+b_to_position_1, 0E9Dh, 0E46h), refused while busy or in read mode.""",
+
+0x0A54: """\
+Dxh 00 in read mode: reply with the byte at 30h (D0), 31h (D1), 32h (D2),
+33h (D4), 34h (D8) or OPTION_P23 (DE). Outside read mode: 0A93h.""",
+
+0x0F77: """\
+Motor B, 96-position circular axis. Target must be 01h-60h. Distance from
+B_POSITION; if more than 30h, go the other way (60h - distance) and flip
+the direction. Result in B_STEPS.""",
+
+0x0F9F: """\
+Speed class for sweep index R7: byte R7/4 of the table at 0FBEh, bit pair
+R7 mod 4, into SPEED0/SPEED1.""",
 
 0x067E: """\
 Serial interrupt. Register bank 1. The UART runs in mode 3: 8 data bits plus
@@ -124,8 +206,8 @@ a 9th bit used as parity (sense set by PARITY_ODD).
   9th bit. With 20h.7 set (loopback test), the first byte is captured in 00h
   instead. After 8 echoed bytes, echo mode ends and 21h.0 is set. main_loop
   enters echo mode after a C0h 80h or C0h C0h frame.
-  Otherwise: check parity, then store a 2-byte frame: first byte in bank 1
-  R7 (07h), second in R6 (06h). Until 21h.0 is set, frames whose first byte
+  Otherwise: check parity, then store a 2-byte frame: first byte at 07h,
+  second at 06h: R7 and R6 of bank 0, the main loop's registers. Until 21h.0 is set, frames whose first byte
   is not C0h are ignored.""",
 
 0x06F4: """\
@@ -158,14 +240,14 @@ then clock in 8 bits from SR_DATA, MSB first.""",
 
 0x0F15: """\
 Clear iRAM 08h-42h, keeping flags 2Bh.2 and 28h.2. Then test P2.3: if it
-reads high, WARM_MARK = A5h, otherwise A0h.""",
+reads high, OPTION_P23 = A5h, otherwise A0h (an option or presence input).""",
 }
 
 COMMENTS = {
     0x0003: 'disable interrupts',
     0x0805: 'interrupts off; RETI pops 0000h',
     0x080C: 'stack above the variables',
-    0x0819: 'warm start?',
+    0x0819: 'P2.3 option present?',
     0x06A8: 'echo with the same 9th bit',
     0x06AC: 'echo the byte',
     0x0904: 'echo mode on, other 20h flags cleared',
@@ -180,26 +262,32 @@ COMMENTS = {
 
 TABLE_COMMENTS = {
     0x057D: 'A = ramp table 057Dh',
-    0x058A: 'A = table 058Ah',
+    0x058A: 'A = motor C period adjustment',
     0x05C5: 'A = ramp table 05C5h',
-    0x039A: 'A = phase table',
-    0x0FBE: 'A = table 0FBEh',
+    0x039A: 'A = 3-phase table entry',
+    0x04CC: 'A = half-step table entry',
+    0x01DF: 'A = speed setting',
+    0x01E2: 'A = speed setting',
+    0x01E5: 'A = speed setting',
+    0x0FBE: 'A = packed speed classes',
 }
 
 DATA = [
     (0x0008, 0x000B, 'bytes', 'Padding'),
     (0x000E, 0x0013, 'bytes', 'Padding'),
     (0x001E, 0x0023, 'bytes', 'Padding'),
-    (0x01DF, 0x01E8, 'bytes', 'Three 3-byte entries selected by timer1_setup (DPTR = 01DFh, 01E2h or 01E5h)'),
-    (0x039B, 0x03A1, 'bytes', 'Table indexed from 039Ah (index starts at 1): phase patterns?'),
-    (0x04D1, 0x04DB, 'bytes', 'Not reached by the trace'),
+    (0x01DF, 0x01E8, 'bytes', 'Timer 0 speed settings, one per speed class: TH0 reload, then bank 1 R2 and R3'),
+    (0x039B, 0x03A1, 'bytes', 'Motor B 3-phase table, entries 1-6 (entry 0 is the RET at 039Ah, entry 7 the byte at 03A1h)'),
+    (0x04D1, 0x04DB, 'bytes', 'Half-step table at 04CCh, entries 5-14 (the other entries overlap code)'),
     (0x057D, 0x058A, 'bytes', 'Ramp table, 13 entries: 98h, 3Fh, 31h, 24h ... 14h (used by ramp_c)'),
-    (0x058A, 0x05C5, 'bytes', 'Table at 058Ah: a short ramp (7Dh, 94h, 59h, 40h ...), then a repeating 1Ch 12h 0Bh pattern'),
+    (0x058A, 0x05C5, 'bytes', 'Motor C period profile, indexed by R5: each move uses three consecutive entries\n'
+                              '(start, after 12 steps, last 7 steps). Entry x B0h or 40h is subtracted from Timer 1.\n'
+                              'The repeating 1Ch 12h 0Bh run looks like filler. Index 39h = 00h, 3Ah = B7h.'),
     (0x05C5, 0x0601, 'bytes', 'Ramp tables at 05C5h, used with different offsets.\n'
                               '05C5h: C9h, 64h, 4Ah, 3Eh, 36h ... about 96/sqrt(n) + 4.\n'
                               '05E3h: ACh, 7Eh, 78h, 6Dh, 64h ... a gentler ramp.\n'
                               'Step delays proportional to 1/sqrt(n) give constant acceleration.'),
-    (0x07BB, 0x0800, 'bytes', 'Not reached by the trace (69 bytes)'),
-    (0x0FBE, 0x0FD7, 'bytes', 'Table at 0FBEh'),
+    (0x07BB, 0x0800, 'bytes', 'Unprogrammed (FFh) up to the 2 KB boundary at 0800h'),
+    (0x0FBE, 0x0FD7, 'bytes', 'Sweep speed classes: 2 bits per sweep index, 4 per byte (see sweep_speed_class)'),
     (0x0FFA, 0x1000, 'bytes', 'Padding (FFh) and a final 00h'),
 ]
